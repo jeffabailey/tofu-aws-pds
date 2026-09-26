@@ -154,12 +154,41 @@ resource "aws_volume_attachment" "pds_data" {
 # VER-1 (resolved 2026-09-25): the pinned PDS digest is an OCI image index carrying both
 # linux/amd64 and linux/arm64, so Graviton is available and t4g is the cheapest way to the
 # required RAM.
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-al2023-latest/al2023-ami-kernel-6.1-arm64"
+#
+# WHY DescribeImages AND NOT THE SSM PUBLIC PARAMETER:
+#   The usual recipe is `/aws/service/ami-al2023-latest/al2023-ami-kernel-6.1-arm64`. That
+#   namespace does not resolve here -- SSM answers "No access to /aws/ namespace:
+#   aws/service/ami-al2023-latest is not a valid namespace", and it says the same to a laptop
+#   identity with broad permissions. Other public parameters in the same namespace DO resolve
+#   (/aws/service/ami-amazon-linux-latest/... returns an AMI id), so this is not an account
+#   restriction and not IAM -- the al2023 path simply is not there to read.
+#
+#   Reading it as an SSM parameter cost a permission on both CI roles for nothing. DescribeImages
+#   needs no new permission at all: `ec2:Describe*` is already granted because plan has to read
+#   the instance anyway. Fewer moving parts, one less grant, and it fails loudly if no image
+#   matches instead of returning something unexpected.
+data "aws_ami" "al2023_arm64" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-kernel-6.1-arm64"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
 }
 
 resource "aws_instance" "pds" {
-  ami                    = coalesce(var.ami_id, nonsensitive(data.aws_ssm_parameter.al2023_arm64.value))
+  ami                    = coalesce(var.ami_id, data.aws_ami.al2023_arm64.id)
   instance_type          = var.descriptor.instance_type
   subnet_id              = data.aws_subnet.chosen.id
   vpc_security_group_ids = [aws_security_group.pds.id]
