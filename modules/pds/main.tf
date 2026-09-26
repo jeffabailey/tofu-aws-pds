@@ -61,29 +61,21 @@ data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-}
-
 # THE SUBNET MUST BE IN AN AZ THAT ACTUALLY OFFERS THE INSTANCE TYPE.
 #
-# This previously took `sort(subnet_ids)[0]` -- the lowest subnet id, which is an arbitrary
-# choice that happens to be deterministic. In this account that is us-east-1e, and us-east-1e
-# does not offer t4g at all:
+# This previously took `sort(subnet_ids)[0]` -- the lowest subnet id, which is deterministic but
+# arbitrary. In this account that is us-east-1e, and us-east-1e offers no t4g at all:
 #
 #   Unsupported: Your requested instance type (t4g.small) is not supported in your requested
 #   Availability Zone (us-east-1e).
 #
-# It plans perfectly and fails at apply, after the security group and the data volume already
-# exist -- the worst place to discover it, because the volume carries prevent_destroy and so
-# cannot simply be moved to another AZ.
+# It plans perfectly and fails at APPLY, after the security group and the data volume already
+# exist -- the worst place to find it, because the volume carries prevent_destroy and an EBS
+# volume cannot change AZ, so recovery needs the guard lifted in a commit.
 #
 # Graviton availability is per-AZ and not uniform, so the AZ set is ASKED FOR rather than
-# assumed. Sorting by AZ name keeps the choice stable across plans; picking by subnet id did
-# not even guarantee that, since a new default subnet could sort ahead of the current one.
+# assumed, and the filter is pushed into the EC2 query rather than done locally: one round trip,
+# no per-subnet reads, and the usable set is what the API says it is.
 data "aws_ec2_instance_type_offerings" "supported" {
   location_type = "availability-zone"
 
@@ -93,31 +85,41 @@ data "aws_ec2_instance_type_offerings" "supported" {
   }
 }
 
-data "aws_subnet" "candidate" {
-  for_each = toset(data.aws_subnets.default.ids)
-  id       = each.value
+# Every default subnet, used only to tell "no subnets at all" from "no subnets in a usable AZ".
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
 
-locals {
-  offered_azs = toset(data.aws_ec2_instance_type_offerings.supported.locations)
-
-  # AZ -> subnet, keeping only AZs where this instance type is actually offered.
-  usable_subnets = {
-    for id, sn in data.aws_subnet.candidate : sn.availability_zone => sn
-    if contains(local.offered_azs, sn.availability_zone)
+# The subnets that can actually run this instance type.
+data "aws_subnets" "usable" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
 
-  chosen_az     = length(local.usable_subnets) > 0 ? sort(keys(local.usable_subnets))[0] : ""
-  chosen_subnet = length(local.usable_subnets) > 0 ? local.usable_subnets[local.chosen_az] : null
+  filter {
+    name   = "availability-zone"
+    values = sort(tolist(data.aws_ec2_instance_type_offerings.supported.locations))
+  }
 }
 
-# Fail at PLAN time with a message that names the problem, rather than at apply with an EC2
-# error after half the environment exists.
+# Sorted so the choice is stable across plans. Selecting by lowest subnet id did not even
+# guarantee that -- a new default subnet could sort ahead of the current one and silently move
+# the environment.
+data "aws_subnet" "chosen" {
+  id = sort(data.aws_subnets.usable.ids)[0]
+}
+
+# Fail at PLAN time, naming the offered AZs, rather than at apply with an EC2 error after half
+# the environment exists.
 resource "terraform_data" "instance_type_is_available" {
   lifecycle {
     precondition {
-      condition     = length(local.usable_subnets) > 0
-      error_message = "No default subnet sits in an availability zone offering ${var.descriptor.instance_type}. Offered in: ${join(", ", sort(tolist(local.offered_azs)))}."
+      condition     = length(data.aws_subnets.usable.ids) > 0
+      error_message = "No default subnet sits in an availability zone offering ${var.descriptor.instance_type}. It is offered in: ${join(", ", sort(tolist(data.aws_ec2_instance_type_offerings.supported.locations)))}. Default subnets exist in this VPC: ${length(data.aws_subnets.default.ids)}."
     }
   }
 }
@@ -173,7 +175,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 # ---------------------------------------------------------------------------------------------
 
 resource "aws_ebs_volume" "pds_data" {
-  availability_zone = local.chosen_az
+  availability_zone = data.aws_subnet.chosen.availability_zone
   size              = var.descriptor.data_volume_gb
   type              = "gp3"
   encrypted         = true
@@ -259,7 +261,7 @@ data "aws_ami" "al2023_arm64" {
 resource "aws_instance" "pds" {
   ami                    = coalesce(var.ami_id, data.aws_ami.al2023_arm64.id)
   instance_type          = var.descriptor.instance_type
-  subnet_id              = local.chosen_subnet.id
+  subnet_id              = data.aws_subnet.chosen.id
   vpc_security_group_ids = [aws_security_group.pds.id]
   iam_instance_profile   = var.instance_profile_name
   key_name               = var.ssh_key_name
