@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# First boot of a PDS host. Runs as root, once per instance.
+#
+# THE RULE THIS FILE EXISTS TO HOLD:
+#   The instance is disposable. The volume is not. Every step below must be safe to run again
+#   on a REBUILT instance that has been handed the SAME volume, and must leave the existing
+#   identity untouched when it is. A did:plc is permanent and public; a PDS that regenerates its
+#   keys on a rebuild has silently thrown away an identity that cannot be re-minted.
+#
+# No credential is an OpenTofu input, output or state value (ADR-013 §3). Secrets are generated
+# HERE, on first boot, and never leave the host except inside an encrypted archive.
+
+set -euo pipefail
+exec > >(tee /var/log/pds-bootstrap.log) 2>&1
+echo "=== PDS bootstrap: ${environment} / ${hostname} @ $(date -Is) ==="
+
+HOSTNAME_FQDN="${hostname}"
+HANDLE="${handle}"
+NAMESPACE="${namespace}"
+ENVIRONMENT="${environment}"
+PDS_IMAGE="${pds_image}"
+CONTACT_PARAM="${contact_ssm_parameter}"
+BACKUP_BUCKET="${backup_bucket}"
+REGION="${aws_region}"
+
+dnf -q -y update
+dnf -q -y install docker jq awscli-2
+systemctl enable --now docker
+
+DOCKER_COMPOSE_DIR=/usr/local/lib/docker/cli-plugins
+mkdir -p "$DOCKER_COMPOSE_DIR"
+if [ ! -x "$DOCKER_COMPOSE_DIR/docker-compose" ]; then
+  curl -fsSL -o "$DOCKER_COMPOSE_DIR/docker-compose" \
+    "https://github.com/docker/compose/releases/download/v2.30.3/docker-compose-linux-aarch64"
+  chmod +x "$DOCKER_COMPOSE_DIR/docker-compose"
+fi
+
+# -------------------------------------------------------------------------------------------
+# The data volume. This block decides whether an identity survives a rebuild.
+# -------------------------------------------------------------------------------------------
+
+# On Nitro, /dev/sdf is presented as an NVMe device with an unpredictable index, so find it by
+# excluding the one carrying the root filesystem rather than guessing a name.
+ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || true)
+DATA_DEV=""
+for dev in /dev/nvme*n1 /dev/xvdf /dev/sdf; do
+  [ -b "$dev" ] || continue
+  [ "$(basename "$dev")" = "$ROOT_DISK" ] && continue
+  DATA_DEV="$dev"
+  break
+done
+
+if [ -z "$DATA_DEV" ]; then
+  echo "FATAL: no data volume found. Refusing to continue: starting a PDS on the root disk" >&2
+  echo "would create an identity on storage that is deleted with the instance." >&2
+  exit 1
+fi
+echo "data volume: $DATA_DEV"
+
+# mkfs ONLY when the volume has no filesystem. `lsblk -no FSTYPE` prints empty for a raw device
+# and the type for a formatted one. If this test is ever wrong in the permissive direction, a
+# rebuild silently destroys the PLC rotation key -- so it fails closed and the guard below
+# re-checks after mounting.
+FSTYPE=$(lsblk -no FSTYPE "$DATA_DEV" | head -1 | tr -d '[:space:]')
+if [ -z "$FSTYPE" ]; then
+  echo "volume is raw -- creating a filesystem (this must happen exactly once in its life)"
+  mkfs.ext4 -L pdsdata "$DATA_DEV"
+else
+  echo "volume already carries $FSTYPE -- preserving it, and everything on it"
+fi
+
+mkdir -p /pds
+grep -q " /pds " /etc/fstab || echo "LABEL=pdsdata /pds ext4 defaults,nofail 0 2" >> /etc/fstab
+mount -a
+mountpoint -q /pds || { echo "FATAL: /pds did not mount" >&2; exit 1; }
+
+# -------------------------------------------------------------------------------------------
+# Secrets: generated once, on the host, and never regenerated.
+# -------------------------------------------------------------------------------------------
+
+if [ -f /pds/pds.env ]; then
+  echo "pds.env exists -- this volume already holds an identity. Keeping every secret as-is."
+else
+  echo "no pds.env -- generating secrets for the first and only time"
+
+  # The ACME contact reaches the host by PARAMETER NAME. The address itself is in no committed
+  # file, no workflow, no OpenTofu variable and no state file (C-P5).
+  ACME_EMAIL=$(aws ssm get-parameter --with-decryption --region "$REGION" \
+      --name "$CONTACT_PARAM" --query 'Parameter.Value' --output text)
+  if [ -z "$ACME_EMAIL" ] || [ "$ACME_EMAIL" = "None" ]; then
+    echo "FATAL: SSM parameter $CONTACT_PARAM is empty. Let's Encrypt needs a contact." >&2
+    exit 1
+  fi
+
+  umask 077
+  cat > /pds/pds.env <<ENVEOF
+PDS_HOSTNAME=$HOSTNAME_FQDN
+PDS_DATA_DIRECTORY=/pds
+PDS_BLOBSTORE_DISK_LOCATION=/pds/blocks
+PDS_BLOB_UPLOAD_LIMIT=52428800
+PDS_JWT_SECRET=$(openssl rand --hex 16)
+PDS_ADMIN_PASSWORD=$(openssl rand --hex 16)
+PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$(openssl ecparam -name secp256k1 -genkey -noout -outform DER | tail -c +8 | head -c 32 | xxd -p -c 32)
+PDS_DID_PLC_URL=https://plc.directory
+PDS_BSKY_APP_VIEW_URL=https://api.bsky.app
+PDS_BSKY_APP_VIEW_DID=did:web:api.bsky.app
+PDS_REPORT_SERVICE_URL=https://mod.bsky.app
+PDS_REPORT_SERVICE_DID=did:plc:ar7c4by46qjdydhdevvrndac
+PDS_EMAIL_SMTP_URL=
+PDS_EMAIL_FROM_ADDRESS=$ACME_EMAIL
+PDS_ACME_EMAIL=$ACME_EMAIL
+PDS_SERVICE_HANDLE_DOMAINS=.$HOSTNAME_FQDN
+PDS_INVITE_REQUIRED=true
+# DQ-8: this PDS announces itself to no relay yet. Pointing it at bsky.network is a separate,
+# deliberate act -- a firehose cannot be un-broadcast (C-P9).
+PDS_CRAWLERS=
+# ADR-015: the default repo-write-hour budget (5,000 points, 3 per create) caps a bulk import at
+# ~1,666 records/hour -- 12.5 days for 500k against 11 minutes with the limiter off. The import
+# opens a self-closing window; steady state is ALWAYS on.
+PDS_RATE_LIMITS_ENABLED=true
+PDS_ENVIRONMENT=$ENVIRONMENT
+PDS_ATPROTO_NAMESPACE=$NAMESPACE
+PDS_INTENDED_HANDLE=$HANDLE
+ENVEOF
+  chmod 600 /pds/pds.env
+fi
+
+mkdir -p /pds/blocks /pds/caddy/data /pds/caddy/config
+
+# -------------------------------------------------------------------------------------------
+# Compose. Vendored from upstream and deliberately different in three ways (deploy/spike/README).
+# -------------------------------------------------------------------------------------------
+
+cat > /pds/caddy/Caddyfile <<'CADDYEOF'
+{
+	email {$PDS_ACME_EMAIL}
+}
+
+*.{$PDS_HOSTNAME}, {$PDS_HOSTNAME} {
+	tls {
+		on_demand
+	}
+	reverse_proxy http://pds:3000
+}
+CADDYEOF
+
+cat > /pds/compose.yaml <<COMPOSEEOF
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: /pds/pds.env
+    volumes:
+      - /pds/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /pds/caddy/data:/data
+      - /pds/caddy/config:/config
+    depends_on:
+      - pds
+
+  pds:
+    # Pinned by DIGEST. Upstream's compose runs watchtower on a nightly schedule with
+    # WATCHTOWER_CLEANUP, which silently replaces the running image -- exactly what a pin is for.
+    image: $PDS_IMAGE
+    restart: unless-stopped
+    env_file: /pds/pds.env
+    volumes:
+      - /pds:/pds
+COMPOSEEOF
+
+cd /pds
+docker compose up -d
+
+# -------------------------------------------------------------------------------------------
+# AC-12.2: prove the identity is recoverable, rather than assume it.
+# -------------------------------------------------------------------------------------------
+
+cat > /usr/local/bin/pds-backup-identity <<BACKUPEOF
+#!/usr/bin/env bash
+# The identity archive. Records are re-importable from the graph; the DID and its rotation key
+# are not, so this is the only backup that matters. Encrypted with a key the host does not keep.
+set -euo pipefail
+STAMP=\$(date -u +%Y%m%dT%H%M%SZ)
+TMP=\$(mktemp -d); trap 'rm -rf "\$TMP"' EXIT
+tar -czf "\$TMP/identity-\$STAMP.tar.gz" -C /pds pds.env
+if [ -f /pds/backup-pubkey.pem ]; then
+  openssl pkeyutl -encrypt -pubin -inkey /pds/backup-pubkey.pem \
+    -in "\$TMP/identity-\$STAMP.tar.gz" -out "\$TMP/identity-\$STAMP.tar.gz.enc"
+  aws s3 cp "\$TMP/identity-\$STAMP.tar.gz.enc" \
+    "s3://$BACKUP_BUCKET/$ENVIRONMENT/identity-\$STAMP.tar.gz.enc" --region "$REGION"
+  echo "archived identity-\$STAMP.tar.gz.enc"
+else
+  echo "REFUSING to upload: /pds/backup-pubkey.pem is absent." >&2
+  echo "An unencrypted rotation key in S3 is worse than no backup at all." >&2
+  exit 1
+fi
+BACKUPEOF
+chmod +x /usr/local/bin/pds-backup-identity
+
+echo "=== bootstrap complete: https://$HOSTNAME_FQDN ==="
+echo "NOTE: TLS will fail until $HOSTNAME_FQDN resolves publicly. See the delegation output."
