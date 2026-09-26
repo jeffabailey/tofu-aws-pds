@@ -182,29 +182,19 @@ resource "aws_ebs_volume" "pds_data" {
 
   tags = merge(local.tags, { Name = "${local.name}-data" })
 
-  # ==========================================================================================
-  # TEMPORARY -- prevent_destroy LIFTED for one apply. RESTORE IT IMMEDIATELY AFTER.
+  # C-P7, mechanism two: a plan that would delete this fails in CI, before any approval.
+  # Removing it is a commit, reviewed like any other.
   #
-  # The first apply of this environment failed part way: the subnet was chosen by lowest id,
-  # which is us-east-1e, and us-east-1e offers no t4g. The security group and THIS VOLUME were
-  # created before the instance failed. The fix moves the environment to an AZ that offers the
-  # instance type, and an EBS volume cannot change AZ -- so it must be replaced.
+  # Lifted once, in 29256e6, to clear an EMPTY volume stranded in us-east-1e by the failed
+  # first apply -- an EBS volume cannot change AZ, so the move required a replacement. Restored
+  # here in the very next commit after that apply succeeded, which is the whole discipline: the
+  # guard is lifted deliberately, narrowly, and put back before anything can grow behind it.
   #
-  # `prevent_destroy` blocked that, correctly. It is being lifted deliberately, through a
-  # commit, which is the procedure ADR-013 §4 requires, rather than worked around with
-  # `state rm` and an out-of-band delete. The difference matters: the guard's whole purpose is
-  # to force this decision into a reviewable change, and the next time it fires the volume will
-  # hold a `did:plc` that cannot be re-minted.
-  #
-  # Safe exactly once, and only because of what this specific volume is:
-  #   vol-05513365b73690528, 20 GB, us-east-1e, state "available" (never attached),
-  #   created 2026-09-26T17:46Z by the failed apply. No PDS has ever run against it, so it
-  #   holds no account, no repository and no rotation key.
-  #
-  # RESTORE `prevent_destroy = true` in the commit immediately after this apply succeeds.
-  # ==========================================================================================
+  # From now on this volume is NOT empty. It holds /pds -- the SQLite repository, the account,
+  # and the PLC rotation key. Records can be re-imported from the graph; a did:plc is permanent,
+  # public, and cannot be re-minted. The next time this guard fires, believe it.
   lifecycle {
-    prevent_destroy = false
+    prevent_destroy = true
   }
 }
 
