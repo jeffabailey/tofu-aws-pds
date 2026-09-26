@@ -131,9 +131,25 @@ mkdir -p /pds/blocks /pds/caddy/data /pds/caddy/config
 # Compose. Vendored from upstream and deliberately different in three ways (deploy/spike/README).
 # -------------------------------------------------------------------------------------------
 
+# `on_demand_tls { ask ... }` IS NOT OPTIONAL.
+#
+# Caddy refuses to serve on-demand TLS without an ask endpoint -- it is the control that stops
+# an open wildcard site from asking Let's Encrypt for a certificate per bogus SNI and burning
+# the rate limit. Without it Caddy does not start, so NOTHING listens on 80 or 443, and the
+# symptom from outside is a connection refused that looks like a security group or DNS problem.
+#
+# The endpoint is the PDS's own /tls-check, which answers only for handles it actually hosts.
+# Upstream points it at localhost because it runs `network_mode: host`; this compose uses a
+# bridge network, so it is the service name.
+#
+# The wildcard site block is what serves the handle (trb.<hostname>) without a DNS TXT record,
+# and a wildcard certificate would need DNS-01 -- hence on-demand rather than a static cert.
 cat > /pds/caddy/Caddyfile <<'CADDYEOF'
 {
 	email {$PDS_ACME_EMAIL}
+	on_demand_tls {
+		ask http://pds:3000/tls-check
+	}
 }
 
 *.{$PDS_HOSTNAME}, {$PDS_HOSTNAME} {
