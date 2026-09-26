@@ -78,36 +78,70 @@ mountpoint -q /pds || { echo "FATAL: /pds did not mount" >&2; exit 1; }
 # Secrets: generated once, on the host, and never regenerated.
 # -------------------------------------------------------------------------------------------
 
-if [ -f /pds/pds.env ]; then
-  echo "pds.env exists -- this volume already holds an identity. Keeping every secret as-is."
-else
-  echo "no pds.env -- generating secrets for the first and only time"
-
-  # The ACME contact reaches the host by PARAMETER NAME. The address itself is in no committed
-  # file, no workflow, no OpenTofu variable and no state file (C-P5).
-  ACME_EMAIL=$(aws ssm get-parameter --with-decryption --region "$REGION" \
-      --name "$CONTACT_PARAM" --query 'Parameter.Value' --output text)
-  if [ -z "$ACME_EMAIL" ] || [ "$ACME_EMAIL" = "None" ]; then
-    echo "FATAL: SSM parameter $CONTACT_PARAM is empty. Let's Encrypt needs a contact." >&2
-    exit 1
-  fi
-
+# SECRETS PERSIST. CONFIGURATION DOES NOT.
+#
+# These were one file, written once and preserved on every rebuild because it held the
+# identity. That also preserved every mistake in it: the partial-email-config bug above
+# survived an instance replacement untouched, and would have survived every future one, because
+# the file that must never be regenerated is the same file the config lives in.
+#
+# So they are split. /pds/secrets.env holds the three values that CANNOT be regenerated and is
+# written exactly once in the volume's life. /pds/pds.env is configuration and is rewritten from
+# this template on every boot, so fixing a setting is a redeploy rather than a hand-edit.
+#
+# Migration: a volume from before the split has its secrets inside pds.env. Lift them out
+# rather than regenerate -- regenerating the rotation key would discard the identity.
+if [ ! -f /pds/secrets.env ]; then
   umask 077
-  cat > /pds/pds.env <<ENVEOF
+  if [ -f /pds/pds.env ] && grep -q '^PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=.' /pds/pds.env; then
+    echo "migrating existing secrets out of pds.env -- NOT regenerating them"
+    grep -E '^(PDS_JWT_SECRET|PDS_ADMIN_PASSWORD|PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX)=' \
+      /pds/pds.env > /pds/secrets.env
+  else
+    echo "no secrets yet -- generating them for the first and only time"
+    cat > /pds/secrets.env <<SECRETSEOF
+PDS_JWT_SECRET=$(openssl rand --hex 16)
+PDS_ADMIN_PASSWORD=$(openssl rand --hex 16)
+PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$(openssl ecparam -name secp256k1 -genkey -noout -outform DER | tail -c +8 | head -c 32 | xxd -p -c 32)
+SECRETSEOF
+  fi
+  chmod 600 /pds/secrets.env
+fi
+
+# Refuse to run with an empty or truncated secrets file rather than start a PDS that would
+# mint a second identity.
+for key in PDS_JWT_SECRET PDS_ADMIN_PASSWORD PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX; do
+  grep -q "^$key=.\+" /pds/secrets.env || { echo "FATAL: $key missing from /pds/secrets.env" >&2; exit 1; }
+done
+
+# The ACME contact reaches the host by PARAMETER NAME. The address itself is in no committed
+# file, no workflow, no OpenTofu variable and no state file (C-P5).
+ACME_EMAIL=$(aws ssm get-parameter --with-decryption --region "$REGION" \
+    --name "$CONTACT_PARAM" --query 'Parameter.Value' --output text)
+if [ -z "$ACME_EMAIL" ] || [ "$ACME_EMAIL" = "None" ]; then
+  echo "FATAL: SSM parameter $CONTACT_PARAM is empty. Let's Encrypt needs a contact." >&2
+  exit 1
+fi
+
+# Configuration, rewritten every boot. Secrets are NOT in here.
+umask 077
+cat > /pds/pds.env <<ENVEOF
 PDS_HOSTNAME=$HOSTNAME_FQDN
 PDS_DATA_DIRECTORY=/pds
 PDS_BLOBSTORE_DISK_LOCATION=/pds/blocks
 PDS_BLOB_UPLOAD_LIMIT=52428800
-PDS_JWT_SECRET=$(openssl rand --hex 16)
-PDS_ADMIN_PASSWORD=$(openssl rand --hex 16)
-PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$(openssl ecparam -name secp256k1 -genkey -noout -outform DER | tail -c +8 | head -c 32 | xxd -p -c 32)
 PDS_DID_PLC_URL=https://plc.directory
 PDS_BSKY_APP_VIEW_URL=https://api.bsky.app
 PDS_BSKY_APP_VIEW_DID=did:web:api.bsky.app
 PDS_REPORT_SERVICE_URL=https://mod.bsky.app
 PDS_REPORT_SERVICE_DID=did:plc:ar7c4by46qjdydhdevvrndac
+# BOTH OR NEITHER. The PDS refuses to start on a partial email config --
+#   "Error: Partial email config, must set both emailFromAddress and emailSmtpUrl"
+# -- and it crash-loops, which from outside looks like a TLS fault, because Caddy's on-demand
+# ask cannot reach a container that is restarting. There is no SMTP server here, so both stay
+# empty. The contact address belongs to ACME only; the PDS has no use for it.
 PDS_EMAIL_SMTP_URL=
-PDS_EMAIL_FROM_ADDRESS=$ACME_EMAIL
+PDS_EMAIL_FROM_ADDRESS=
 PDS_ACME_EMAIL=$ACME_EMAIL
 PDS_SERVICE_HANDLE_DOMAINS=.$HOSTNAME_FQDN
 PDS_INVITE_REQUIRED=true
@@ -122,7 +156,7 @@ PDS_ENVIRONMENT=$ENVIRONMENT
 PDS_ATPROTO_NAMESPACE=$NAMESPACE
 PDS_INTENDED_HANDLE=$HANDLE
 ENVEOF
-  chmod 600 /pds/pds.env
+chmod 600 /pds/pds.env
 fi
 
 mkdir -p /pds/blocks /pds/caddy/data /pds/caddy/config
@@ -189,7 +223,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    env_file: /pds/pds.env
+    env_file:
+      - /pds/secrets.env
+      - /pds/pds.env
     volumes:
       - /pds/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - /pds/caddy/data:/data
@@ -202,7 +238,9 @@ services:
     # WATCHTOWER_CLEANUP, which silently replaces the running image -- exactly what a pin is for.
     image: $PDS_IMAGE
     restart: unless-stopped
-    env_file: /pds/pds.env
+    env_file:
+      - /pds/secrets.env
+      - /pds/pds.env
     volumes:
       - /pds:/pds
 COMPOSEEOF
@@ -221,7 +259,7 @@ cat > /usr/local/bin/pds-backup-identity <<BACKUPEOF
 set -euo pipefail
 STAMP=\$(date -u +%Y%m%dT%H%M%SZ)
 TMP=\$(mktemp -d); trap 'rm -rf "\$TMP"' EXIT
-tar -czf "\$TMP/identity-\$STAMP.tar.gz" -C /pds pds.env
+tar -czf "\$TMP/identity-\$STAMP.tar.gz" -C /pds secrets.env
 if [ -f /pds/backup-pubkey.pem ]; then
   openssl pkeyutl -encrypt -pubin -inkey /pds/backup-pubkey.pem \
     -in "\$TMP/identity-\$STAMP.tar.gz" -out "\$TMP/identity-\$STAMP.tar.gz.enc"
