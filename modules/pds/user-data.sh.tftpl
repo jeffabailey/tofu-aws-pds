@@ -152,7 +152,28 @@ cat > /pds/caddy/Caddyfile <<'CADDYEOF'
 	}
 }
 
-*.{$PDS_HOSTNAME}, {$PDS_HOSTNAME} {
+# THE PDS'S OWN HOSTNAME MUST NOT DEPEND ON AN ACCOUNT EXISTING.
+#
+# Upstream puts the bare hostname and the wildcard in ONE on-demand block. That makes every
+# certificate, including the server's own, conditional on /tls-check saying yes -- and
+# /tls-check answers for HANDLES. On a server with no account yet there is no handle, so the
+# ask refuses, no certificate is issued, and the PDS is unreachable over TLS. Observed exactly
+# that: port 443 open, Caddy answering 308 on port 80, and the handshake returning
+# "no peer certificate available".
+#
+# It is also a requirement, not just a convenience: AC-04.1 check 6 says describeRepo must
+# report NO COLLECTIONS before the walking skeleton runs -- so the server has to be reachable
+# before anything exists on it. A certificate that waits for an account cannot satisfy that.
+#
+# So the two are split. The bare hostname gets an ordinary HTTP-01 certificate at startup, with
+# no ask in the way. The wildcard keeps on-demand, because a wildcard certificate would need
+# DNS-01, and the ask is the right control there: it stops an open wildcard from requesting a
+# certificate per bogus SNI.
+{$PDS_HOSTNAME} {
+	reverse_proxy http://pds:3000
+}
+
+*.{$PDS_HOSTNAME} {
 	tls {
 		on_demand
 	}
