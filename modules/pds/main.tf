@@ -68,8 +68,58 @@ data "aws_subnets" "default" {
   }
 }
 
-data "aws_subnet" "chosen" {
-  id = sort(data.aws_subnets.default.ids)[0]
+# THE SUBNET MUST BE IN AN AZ THAT ACTUALLY OFFERS THE INSTANCE TYPE.
+#
+# This previously took `sort(subnet_ids)[0]` -- the lowest subnet id, which is an arbitrary
+# choice that happens to be deterministic. In this account that is us-east-1e, and us-east-1e
+# does not offer t4g at all:
+#
+#   Unsupported: Your requested instance type (t4g.small) is not supported in your requested
+#   Availability Zone (us-east-1e).
+#
+# It plans perfectly and fails at apply, after the security group and the data volume already
+# exist -- the worst place to discover it, because the volume carries prevent_destroy and so
+# cannot simply be moved to another AZ.
+#
+# Graviton availability is per-AZ and not uniform, so the AZ set is ASKED FOR rather than
+# assumed. Sorting by AZ name keeps the choice stable across plans; picking by subnet id did
+# not even guarantee that, since a new default subnet could sort ahead of the current one.
+data "aws_ec2_instance_type_offerings" "supported" {
+  location_type = "availability-zone"
+
+  filter {
+    name   = "instance-type"
+    values = [var.descriptor.instance_type]
+  }
+}
+
+data "aws_subnet" "candidate" {
+  for_each = toset(data.aws_subnets.default.ids)
+  id       = each.value
+}
+
+locals {
+  offered_azs = toset(data.aws_ec2_instance_type_offerings.supported.locations)
+
+  # AZ -> subnet, keeping only AZs where this instance type is actually offered.
+  usable_subnets = {
+    for id, sn in data.aws_subnet.candidate : sn.availability_zone => sn
+    if contains(local.offered_azs, sn.availability_zone)
+  }
+
+  chosen_az     = length(local.usable_subnets) > 0 ? sort(keys(local.usable_subnets))[0] : ""
+  chosen_subnet = length(local.usable_subnets) > 0 ? local.usable_subnets[local.chosen_az] : null
+}
+
+# Fail at PLAN time with a message that names the problem, rather than at apply with an EC2
+# error after half the environment exists.
+resource "terraform_data" "instance_type_is_available" {
+  lifecycle {
+    precondition {
+      condition     = length(local.usable_subnets) > 0
+      error_message = "No default subnet sits in an availability zone offering ${var.descriptor.instance_type}. Offered in: ${join(", ", sort(tolist(local.offered_azs)))}."
+    }
+  }
 }
 
 resource "aws_security_group" "pds" {
@@ -123,17 +173,36 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 # ---------------------------------------------------------------------------------------------
 
 resource "aws_ebs_volume" "pds_data" {
-  availability_zone = data.aws_subnet.chosen.availability_zone
+  availability_zone = local.chosen_az
   size              = var.descriptor.data_volume_gb
   type              = "gp3"
   encrypted         = true
 
   tags = merge(local.tags, { Name = "${local.name}-data" })
 
-  # C-P7, mechanism two: a plan that would delete this fails in CI, before any approval.
-  # Removing it is a commit, reviewed like any other.
+  # ==========================================================================================
+  # TEMPORARY -- prevent_destroy LIFTED for one apply. RESTORE IT IMMEDIATELY AFTER.
+  #
+  # The first apply of this environment failed part way: the subnet was chosen by lowest id,
+  # which is us-east-1e, and us-east-1e offers no t4g. The security group and THIS VOLUME were
+  # created before the instance failed. The fix moves the environment to an AZ that offers the
+  # instance type, and an EBS volume cannot change AZ -- so it must be replaced.
+  #
+  # `prevent_destroy` blocked that, correctly. It is being lifted deliberately, through a
+  # commit, which is the procedure ADR-013 §4 requires, rather than worked around with
+  # `state rm` and an out-of-band delete. The difference matters: the guard's whole purpose is
+  # to force this decision into a reviewable change, and the next time it fires the volume will
+  # hold a `did:plc` that cannot be re-minted.
+  #
+  # Safe exactly once, and only because of what this specific volume is:
+  #   vol-05513365b73690528, 20 GB, us-east-1e, state "available" (never attached),
+  #   created 2026-09-26T17:46Z by the failed apply. No PDS has ever run against it, so it
+  #   holds no account, no repository and no rotation key.
+  #
+  # RESTORE `prevent_destroy = true` in the commit immediately after this apply succeeds.
+  # ==========================================================================================
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
@@ -190,7 +259,7 @@ data "aws_ami" "al2023_arm64" {
 resource "aws_instance" "pds" {
   ami                    = coalesce(var.ami_id, data.aws_ami.al2023_arm64.id)
   instance_type          = var.descriptor.instance_type
-  subnet_id              = data.aws_subnet.chosen.id
+  subnet_id              = local.chosen_subnet.id
   vpc_security_group_ids = [aws_security_group.pds.id]
   iam_instance_profile   = var.instance_profile_name
   key_name               = var.ssh_key_name
