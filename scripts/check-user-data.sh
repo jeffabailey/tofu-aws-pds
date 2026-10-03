@@ -128,5 +128,48 @@ check "the account password is stored before the app password is minted" \
 check "swap_mb = 1024 creates and enables a swap file" \
   "grep -q '^SWAP_MB=1024$' '$SWAPPED' && grep -q 'swapon' '$SWAPPED'"
 
+# The identity backup round trip, through the RENDERED backup script: install it the way the
+# host does (the unquoted heredoc expands BACKUP_BUCKET/ENVIRONMENT/REGION), run it against a
+# fake /pds with a stub `aws`, then decrypt the captured archive with the restore script.
+# 2048-bit keys are the case the old RSA-the-whole-archive scheme could not handle.
+if command -v openssl >/dev/null && openssl version | grep -q '^OpenSSL 3' && command -v xxd >/dev/null; then
+  RT="$WORK/backup-rt"; mkdir -p "$RT/pds" "$RT/bin" "$RT/s3"
+  sed -n '/^cat > \/usr\/local\/bin\/pds-backup-identity <<BACKUPEOF$/,/^BACKUPEOF$/p' "$RENDERED" \
+    | sed "s#/usr/local/bin/pds-backup-identity#$RT/pds-backup-identity#" > "$RT/install.sh"
+  BACKUP_BUCKET=example-bucket ENVIRONMENT=test REGION=us-east-1 bash "$RT/install.sh"
+  chmod +x "$RT/pds-backup-identity"
+  cat > "$RT/bin/aws" <<'AWSEOF'
+#!/usr/bin/env bash
+# Stub: capture the object an `aws s3 cp <file> s3://...` would upload.
+[ "$1 $2" = "s3 cp" ] && cp "$3" "$CAPTURE/" && echo "stub upload to $4"
+AWSEOF
+  chmod +x "$RT/bin/aws"
+  { echo "PDS_JWT_SECRET=$(openssl rand -hex 16)"; echo "PDS_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+    echo "PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$(openssl rand -hex 32)"
+    echo "PADDING=$(openssl rand -hex 2048)"; } > "$RT/pds/secrets.env"
+  for bits in 2048 4096; do
+    rm -f "$RT/s3/"*
+    openssl genpkey -algorithm RSA -pkeyopt "rsa_keygen_bits:$bits" -out "$RT/private.pem" 2>/dev/null
+    openssl pkey -in "$RT/private.pem" -pubout -out "$RT/pds/backup-pubkey.pem"
+    PATH="$RT/bin:$PATH" CAPTURE="$RT/s3" PDS_DIR="$RT/pds" "$RT/pds-backup-identity" >/dev/null \
+      || { echo "FAIL: pds-backup-identity failed with a $bits-bit key" >&2; exit 1; }
+    ARCHIVE=$(ls "$RT/s3/"identity-*.enc.tar)
+    rm -rf "$RT/restored"
+    "$(dirname "$0")/pds-restore-identity.sh" "$ARCHIVE" "$RT/private.pem" "$RT/restored" >/dev/null
+    cmp -s "$RT/pds/secrets.env" "$RT/restored/secrets.env" \
+      || { echo "FAIL: backup round trip ($bits-bit key) did not restore secrets.env byte for byte" >&2; exit 1; }
+  done
+  # Tamper: flip one ciphertext byte; the restore must refuse, not decrypt.
+  mkdir -p "$RT/tamper" && tar -xf "$ARCHIVE" -C "$RT/tamper"
+  printf '\x00' | dd of="$RT/tamper/payload.enc" bs=1 seek=40 conv=notrunc status=none
+  tar -cf "$RT/tampered.tar" -C "$RT/tamper" FORMAT iv payload.enc payload.mac keys.enc
+  if "$(dirname "$0")/pds-restore-identity.sh" "$RT/tampered.tar" "$RT/private.pem" "$RT/t-out" 2>/dev/null; then
+    echo "FAIL: a tampered archive was restored" >&2; exit 1
+  fi
+  echo "identity backup round-trips (2048- and 4096-bit keys) and refuses a tampered archive"
+else
+  echo "SKIP: identity backup round trip needs OpenSSL 3 and xxd" >&2
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "user-data renders, parses as shell, and holds its structural invariants"

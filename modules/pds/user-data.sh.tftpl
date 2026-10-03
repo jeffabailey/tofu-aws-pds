@@ -279,22 +279,45 @@ docker compose up -d
 cat > /usr/local/bin/pds-backup-identity <<BACKUPEOF
 #!/usr/bin/env bash
 # The identity archive. Records are re-importable from the graph; the DID and its rotation key
-# are not, so this is the only backup that matters. Encrypted with a key the host does not keep.
+# are not, so this is the only backup that matters. Encrypted to a key the host does not keep.
+#
+# Hybrid encryption, because RSA alone only encrypts a message smaller than its key (a 2048-bit
+# key took ~245 bytes, so encrypting the archive itself broke as soon as it outgrew that):
+#   - a fresh random AES-256 key and HMAC-SHA256 key for every archive;
+#   - the archive encrypted with AES-256-CBC, then authenticated with the HMAC over iv+ciphertext
+#     (encrypt-then-MAC), so a tampered or truncated archive is refused rather than decrypted;
+#   - only those 64 key bytes wrapped with RSA-OAEP(SHA-256) to backup-pubkey.pem, so any RSA
+#     key of 2048 bits or more works.
+# Restore: scripts/pds-restore-identity.sh in github.com/jeffabailey/tofu-aws-pds.
 set -euo pipefail
-STAMP=\$(date -u +%Y%m%dT%H%M%SZ)
-TMP=\$(mktemp -d); trap 'rm -rf "\$TMP"' EXIT
-tar -czf "\$TMP/identity-\$STAMP.tar.gz" -C /pds secrets.env
-if [ -f /pds/backup-pubkey.pem ]; then
-  openssl pkeyutl -encrypt -pubin -inkey /pds/backup-pubkey.pem \
-    -in "\$TMP/identity-\$STAMP.tar.gz" -out "\$TMP/identity-\$STAMP.tar.gz.enc"
-  aws s3 cp "\$TMP/identity-\$STAMP.tar.gz.enc" \
-    "s3://$BACKUP_BUCKET/$ENVIRONMENT/identity-\$STAMP.tar.gz.enc" --region "$REGION"
-  echo "archived identity-\$STAMP.tar.gz.enc"
-else
-  echo "REFUSING to upload: /pds/backup-pubkey.pem is absent." >&2
+PDS_DIR=\$${PDS_DIR:-/pds}
+if [ ! -f "\$PDS_DIR/backup-pubkey.pem" ]; then
+  echo "REFUSING to upload: \$PDS_DIR/backup-pubkey.pem is absent." >&2
   echo "An unencrypted rotation key in S3 is worse than no backup at all." >&2
   exit 1
 fi
+umask 077
+STAMP=\$(date -u +%Y%m%dT%H%M%SZ)
+TMP=\$(mktemp -d); trap 'rm -rf "\$TMP"' EXIT
+mkdir "\$TMP/out"
+tar -czf "\$TMP/identity.tar.gz" -C "\$PDS_DIR" secrets.env
+openssl rand 64 > "\$TMP/keys"
+ENC_KEY=\$(head -c 32 "\$TMP/keys" | xxd -p -c 64)
+MAC_KEY=\$(tail -c 32 "\$TMP/keys" | xxd -p -c 64)
+openssl rand -hex 16 > "\$TMP/out/iv"
+openssl enc -aes-256-cbc -K "\$ENC_KEY" -iv "\$(cat "\$TMP/out/iv")" \
+  -in "\$TMP/identity.tar.gz" -out "\$TMP/out/payload.enc"
+cat "\$TMP/out/iv" "\$TMP/out/payload.enc" \
+  | openssl dgst -sha256 -mac HMAC -macopt "hexkey:\$MAC_KEY" -binary > "\$TMP/out/payload.mac"
+openssl pkeyutl -encrypt -pubin -inkey "\$PDS_DIR/backup-pubkey.pem" \
+  -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 \
+  -in "\$TMP/keys" -out "\$TMP/out/keys.enc"
+echo "pds-identity-backup v2: aes-256-cbc + hmac-sha256 (encrypt-then-mac), keys rsa-oaep-sha256" \
+  > "\$TMP/out/FORMAT"
+tar -cf "\$TMP/identity-\$STAMP.enc.tar" -C "\$TMP/out" FORMAT iv payload.enc payload.mac keys.enc
+aws s3 cp "\$TMP/identity-\$STAMP.enc.tar" \
+  "s3://$BACKUP_BUCKET/$ENVIRONMENT/identity-\$STAMP.enc.tar" --region "$REGION"
+echo "archived identity-\$STAMP.enc.tar"
 BACKUPEOF
 chmod +x /usr/local/bin/pds-backup-identity
 %{ if bootstrap_account ~}

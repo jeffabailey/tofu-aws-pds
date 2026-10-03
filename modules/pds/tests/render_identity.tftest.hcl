@@ -1,24 +1,22 @@
-# Render identity: the extraction must not change a single byte of the host bootstrap for the
-# inputs the-reality-base (TRB) already runs with.
+# Render identity: the host bootstrap the-reality-base (TRB) gets for its inputs is pinned, so any
+# change to it is a deliberate, CHANGELOG-listed release rather than a surprise in a plan.
 #
 # A user_data change on a live instance is an in-place stop/start (AWS provider v6). The PDS
-# survives it -- the volume and EIP are separate resources -- but an UNPLANNED stop/start during
-# the cut-over is exactly the regression this test exists to catch. TRB's cut-over gate is "no
-# create, delete or replace on any address", and a changed user_data is the easiest way to
-# sneak a diff past a reviewer who expects none.
+# survives it -- the volume and EIP are separate resources -- but an UNPLANNED one is exactly the
+# regression this test exists to catch: a changed user_data is the easiest way to sneak a diff
+# past a reviewer who expects none.
 #
-# HOW THE GOLDEN HASHES WERE DERIVED (2026-10-02):
-#   A throwaway OpenTofu root (no providers) evaluated
-#     sha256(templatefile("<the-reality-base>/deploy/tofu/modules/pds/user-data.sh.tftpl", {...}))
-#   against the ORIGINAL, pre-extraction template at the-reality-base commit 025bec4, with the
-#   same eight variables the module passes, filled from TRB's deploy/environments/{prod,test}.json,
-#   the module's default pds_image digest, backup_bucket "trb-identity-backup-415898136109" and
-#   aws_region "us-east-1". `tofu output` printed:
+# HOW THE GOLDEN HASHES WERE DERIVED:
+#   v1.0.0-v1.3.0 (2026-10-02): sha256 of the ORIGINAL, pre-extraction template at the-reality-base
+#   commit 025bec4, rendered with TRB's deploy/environments/{prod,test}.json, the default
+#   pds_image digest, backup_bucket "trb-identity-backup-415898136109" and aws_region "us-east-1":
 #     prod  769544157dc032f60110b15f0203e0995291a1952fe3299141a65dab7527b19b
 #     test  1ec07ff737a444ab9124224b4b262ce8bac0bfb5ace19062605872a4e2c9942e
-#   Before TRB's cut-over these should also be compared against the live instance's user_data
-#   (ADR-069 step 1). If they ever disagree, the live value wins and this file is wrong.
-#
+#   v1.4.0 (2026-10-03): the same inputs after the identity-backup fix, whose only change is the
+#   body of /usr/local/bin/pds-backup-identity (hybrid encryption; see CHANGELOG):
+#     prod  2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368
+#     test  0b2f169dd869dfc3368f4ffd91f9955cb67c6eaa54d9870dc332055fbcd31a7b
+
 # Everything is mocked. The test creates nothing and needs no credentials.
 
 mock_provider "aws" {
@@ -59,7 +57,7 @@ run "trb_prod_renders_byte_identical" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "769544157dc032f60110b15f0203e0995291a1952fe3299141a65dab7527b19b"
+    condition     = sha256(aws_instance.pds.user_data) == "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
     error_message = "TRB prod user_data changed: sha256 ${sha256(aws_instance.pds.user_data)}. Applying this would stop/start the live prod PDS."
   }
 }
@@ -84,7 +82,7 @@ run "trb_test_renders_byte_identical" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "1ec07ff737a444ab9124224b4b262ce8bac0bfb5ace19062605872a4e2c9942e"
+    condition     = sha256(aws_instance.pds.user_data) == "0b2f169dd869dfc3368f4ffd91f9955cb67c6eaa54d9870dc332055fbcd31a7b"
     error_message = "TRB test user_data changed: sha256 ${sha256(aws_instance.pds.user_data)}."
   }
 }

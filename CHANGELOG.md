@@ -4,6 +4,23 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.4.0 — 2026-10-03
+
+- `modules/pds`: the identity backup (`pds-backup-identity`) RSA-encrypted the whole archive,
+  which only works while the archive is smaller than the key (about 245 bytes for 2048-bit RSA),
+  so it failed for most keys. It is now hybrid: a fresh AES-256 + HMAC-SHA256 key pair per
+  archive, AES-256-CBC then HMAC (encrypt-then-MAC), and only the 64 key bytes wrapped with
+  RSA-OAEP(SHA-256). The object is now `identity-<stamp>.enc.tar` (format v2). `PDS_DIR`
+  overrides `/pds` (for tests).
+- New `scripts/pds-restore-identity.sh` decrypts a v2 archive, refusing it on an HMAC mismatch.
+- `scripts/check-user-data.sh` runs the rendered backup script and restores its output with
+  2048- and 4096-bit keys, and checks that a tampered archive is refused.
+
+**Addresses changed: none. `user_data` changes for every consumer** (only the backup script's
+body; the golden hashes in `render_identity.tftest.hcl` are updated and the old ones kept in its
+comment). On a live host that is an in-place stop/start that does not re-run cloud-init: replace
+the instance to get the new backup script (the volume, and the identity, survive).
+
 ## v1.3.0 — 2026-10-03
 
 - `modules/pds`: new input `verification_methods` (map of method id -> `did:key:z...`, default

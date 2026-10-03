@@ -20,7 +20,7 @@ each in its own AWS account.
 
 ```hcl
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.3.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.4.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -78,6 +78,30 @@ None is sensitive, and none can be: every credential is generated on the host at
 
 Outputs: `backup_bucket`, `host_instance_profile_names`, `state_bucket`, `hosted_zone_id`,
 `default_vpc_id`, `plan_role_arns`, `apply_role_arns`, `account_id`.
+
+## Identity backup and restore
+
+The DID's rotation key lives only on the data volume, in `/pds/secrets.env`. The host can archive
+it to the backup bucket, encrypted to a key it does not hold:
+
+1. Make an RSA key pair (2048 bits or more) and keep the private key offline:
+   `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out backup-private.pem`
+   and `openssl pkey -in backup-private.pem -pubout -out backup-pubkey.pem`.
+2. Put `backup-pubkey.pem` on the host at `/pds/backup-pubkey.pem` (it survives rebuilds).
+3. On the host: `sudo pds-backup-identity` writes `s3://<backup bucket>/<env>/identity-<stamp>.enc.tar`.
+
+The archive is hybrid-encrypted (v1.4.0+): a fresh AES-256 key and HMAC-SHA256 key per archive,
+AES-256-CBC then HMAC over iv+ciphertext, and only those key bytes wrapped with
+RSA-OAEP(SHA-256). Restore with OpenSSL 3:
+
+```sh
+scripts/pds-restore-identity.sh identity-<stamp>.enc.tar backup-private.pem ./restored
+# -> ./restored/secrets.env, to place at /pds/secrets.env on a volume for a new host
+```
+
+The restore checks the HMAC before decrypting, so a tampered or truncated archive is refused.
+`scripts/check-user-data.sh` round-trips the rendered backup script through it with 2048- and
+4096-bit keys.
 
 ## Versioning and upgrades
 

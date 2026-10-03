@@ -32,7 +32,7 @@ variables {
   ami_id                = "ami-00000000000000001"
 }
 
-run "swap_zero_is_byte_identical_to_v1_0_0" {
+run "swap_zero_renders_the_golden" {
   command = plan
 
   variables {
@@ -40,7 +40,7 @@ run "swap_zero_is_byte_identical_to_v1_0_0" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "769544157dc032f60110b15f0203e0995291a1952fe3299141a65dab7527b19b"
+    condition     = sha256(aws_instance.pds.user_data) == "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
     error_message = "swap_mb = 0 changed user_data (sha256 ${sha256(aws_instance.pds.user_data)})."
   }
 
@@ -79,7 +79,7 @@ run "swap_1024_renders_a_swapfile_step" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) != "769544157dc032f60110b15f0203e0995291a1952fe3299141a65dab7527b19b"
+    condition     = sha256(aws_instance.pds.user_data) != "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
     error_message = "swap_mb = 1024 rendered the same user_data as swap_mb = 0."
   }
 }
