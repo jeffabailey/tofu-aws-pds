@@ -45,6 +45,7 @@ locals {
     swap_mb               = var.swap_mb
     bootstrap_account     = var.bootstrap_account
     account_ssm_prefix    = local.account_ssm_prefix
+    verification_methods  = var.verification_methods
   })
   # Bytes, not characters (the script has non-ASCII comments): base64 is 4 chars per 3 bytes.
   user_data_fits = ceil(length(base64encode(local.user_data)) * 3 / 4) <= 16384

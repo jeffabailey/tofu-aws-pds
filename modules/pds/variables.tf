@@ -153,3 +153,30 @@ variable "bootstrap_account" {
   type        = bool
   default     = false
 }
+
+variable "verification_methods" {
+  description = <<-EOT
+    Extra verification methods to publish in the account's did:plc document, as
+    { "<method id>" = "did:key:z..." } -- e.g. { "org.openlore.application" = "did:key:z6Mk..." }
+    for an application's Ed25519 claim-signing key. First boot signs the PLC update with this
+    PDS's rotation key (so it needs the account to exist: pair with bootstrap_account or create
+    it first). Idempotent; other methods (the account's #atproto key) are kept. {} (the default)
+    renders user_data byte-identical to v1.2.x. Changing it on a live host means replacing the
+    instance, like the other first-boot inputs.
+  EOT
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for id, key in var.verification_methods :
+      can(regex("^[a-z0-9][a-z0-9.-]{0,62}$", id)) && can(regex("^did:key:z[1-9A-HJ-NP-Za-km-z]+$", key))
+    ])
+    error_message = "verification_methods maps a lowercase method id to a did:key:z... value."
+  }
+
+  validation {
+    condition     = !contains(keys(var.verification_methods), "atproto")
+    error_message = "The #atproto method is the account's own signing key; the PDS manages it."
+  }
+}

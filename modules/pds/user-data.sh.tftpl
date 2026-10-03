@@ -353,6 +353,65 @@ chmod +x /usr/local/bin/pds-ensure-account
 /usr/local/bin/pds-ensure-account "${handle}" "${account_ssm_prefix}" "$REGION" "$CONTACT_PARAM" \
   || echo "WARNING: account bootstrap failed; re-run /usr/local/bin/pds-ensure-account by hand" >&2
 %{ endif ~}
+%{ if length(verification_methods) > 0 ~}
+
+# -------------------------------------------------------------------------------------------
+# Extra verification methods in the account's DID document (e.g. an application signing key).
+#
+# The account's did:plc lists this PDS's rotation key, which lives in /pds/secrets.env, so the
+# host can sign the PLC update itself -- no email token, no operator laptop. Idempotent: methods
+# already published with the same key are left alone, and only the named methods change (the
+# account's #atproto key and everything else in the document are carried over). Runs inside the
+# PDS container, which has @did-plc/lib and the rotation key in its environment.
+# -------------------------------------------------------------------------------------------
+mkdir -p /usr/local/lib/pds
+cat > /usr/local/lib/pds/ensure-verification-methods.cjs <<'VMEOF'
+// Usage (inside the PDS container): node - <handle> <methods-json> < this file
+const L = "/app/node_modules/.pnpm/@did-plc+lib@0.0.4/node_modules/";
+const plc = require(L + "@did-plc/lib");
+const { Secp256k1Keypair } = require(L + "@atproto/crypto");
+const [handle, wantJson] = process.argv.slice(-2);
+const want = JSON.parse(wantJson);
+(async () => {
+  const url = "http://localhost:3000/xrpc/com.atproto.identity.resolveHandle?handle=";
+  const res = await fetch(url + encodeURIComponent(handle));
+  if (!res.ok) throw new Error("handle " + handle + " does not resolve on this PDS: " + res.status);
+  const did = (await res.json()).did;
+  const client = new plc.Client(process.env.PDS_DID_PLC_URL || "https://plc.directory");
+  const have = (await client.getDocumentData(did)).verificationMethods || {};
+  const stale = Object.keys(want).filter((id) => have[id] !== want[id]);
+  if (stale.length === 0) {
+    console.log(did + ": verification methods already current");
+    return;
+  }
+  const signer = await Secp256k1Keypair.import(process.env.PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX);
+  await client.updateData(did, signer, (op) => ({
+    ...op,
+    verificationMethods: { ...op.verificationMethods, ...want },
+  }));
+  console.log(did + ": published " + stale.join(", "));
+})().catch((err) => {
+  console.error(String((err && err.stack) || err));
+  process.exit(1);
+});
+VMEOF
+
+cat > /usr/local/bin/pds-ensure-verification-methods <<'VMSHEOF'
+#!/usr/bin/env bash
+# Usage: pds-ensure-verification-methods <handle> <methods-json>
+set -euo pipefail
+for _ in $(seq 1 60); do
+  docker exec pds-pds-1 node -e \
+    'fetch("http://localhost:3000/xrpc/_health").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
+    && break
+  sleep 5
+done
+docker exec -i pds-pds-1 node - "$1" "$2" < /usr/local/lib/pds/ensure-verification-methods.cjs
+VMSHEOF
+chmod +x /usr/local/bin/pds-ensure-verification-methods
+/usr/local/bin/pds-ensure-verification-methods "${handle}" '${jsonencode(verification_methods)}' \
+  || echo "WARNING: verification methods not published; re-run /usr/local/bin/pds-ensure-verification-methods by hand" >&2
+%{ endif ~}
 
 echo "=== bootstrap complete: https://$HOSTNAME_FQDN ==="
 echo "NOTE: TLS will fail until $HOSTNAME_FQDN resolves publicly. See the delegation output."

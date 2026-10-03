@@ -31,7 +31,7 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # Render the template with the same variable names the module passes, and values shaped like
 # real ones. $1 is swap_mb, $2 bootstrap_account (default false). Prints the rendered text.
 render() {
-  local swap_mb="$1" account="${2:-false}" dir="$WORK/render"
+  local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" dir="$WORK/render"
   rm -rf "$dir"; mkdir -p "$dir"
   cat > "$dir/main.tf" <<HCL
 output "user_data" {
@@ -47,6 +47,7 @@ output "user_data" {
     swap_mb               = $swap_mb
     bootstrap_account     = $account
     account_ssm_prefix    = "/example/test"
+    verification_methods  = $methods
   })
 }
 HCL
@@ -68,7 +69,7 @@ SWAPPED="$WORK/user-data-swap.sh"
 render 0 > "$RENDERED"
 render 1024 > "$SWAPPED"
 ACCOUNTED="$WORK/user-data-account.sh"
-render 1024 true > "$ACCOUNTED"
+render 1024 true '{ "org.example.app" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }' > "$ACCOUNTED"
 
 bash -n "$RENDERED" || { echo "FAIL: rendered user-data (swap_mb=0) is not valid shell" >&2; exit 1; }
 bash -n "$SWAPPED" || { echo "FAIL: rendered user-data (swap_mb=1024) is not valid shell" >&2; exit 1; }
@@ -81,6 +82,20 @@ sed -n "/<<'ACCOUNTEOF'$/,/^ACCOUNTEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$ENSURE
 bash -n "$ENSURE" || { echo "FAIL: pds-ensure-account is not valid shell" >&2; exit 1; }
 if command -v shellcheck >/dev/null; then
   shellcheck "$ENSURE" || { echo "FAIL: pds-ensure-account has shellcheck findings" >&2; exit 1; }
+fi
+
+# The verification-methods step: a bash wrapper and a Node script, both quoted heredocs.
+VMSH="$WORK/pds-ensure-verification-methods"
+VMJS="$WORK/ensure-verification-methods.cjs"
+sed -n "/<<'VMSHEOF'$/,/^VMSHEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$VMSH"
+sed -n "/<<'VMEOF'$/,/^VMEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$VMJS"
+[ -s "$VMSH" ] && [ -s "$VMJS" ] || { echo "FAIL: the verification-methods step is missing" >&2; exit 1; }
+bash -n "$VMSH" || { echo "FAIL: pds-ensure-verification-methods is not valid shell" >&2; exit 1; }
+if command -v shellcheck >/dev/null; then
+  shellcheck "$VMSH" || { echo "FAIL: pds-ensure-verification-methods has shellcheck findings" >&2; exit 1; }
+fi
+if command -v node >/dev/null; then
+  node --check "$VMJS" || { echo "FAIL: ensure-verification-methods.cjs is not valid JavaScript" >&2; exit 1; }
 fi
 
 # Cheap structural assertions about things that have actually broken.
@@ -96,6 +111,10 @@ check "on-demand TLS declares an ask endpoint (Caddy will not start without one)
   "grep -q 'on_demand_tls' '$RENDERED'"
 check "swap_mb = 0 renders no swap step" \
   "! grep -q 'swapon' '$RENDERED'"
+check "no verification methods renders no PLC step" \
+  "! grep -q 'pds-ensure-verification-methods' '$RENDERED'"
+check "the PLC step runs for the handle with the methods as JSON" \
+  "grep -qF '/usr/local/bin/pds-ensure-verification-methods \"alice.test.pds.example.com\" '\''{\"org.example.app\":\"did:key:z6Mk' '$ACCOUNTED'"
 check "bootstrap_account = false renders no account step" \
   "! grep -q 'pds-ensure-account' '$RENDERED'"
 check "bootstrap_account publishes the PDS port on loopback only" \

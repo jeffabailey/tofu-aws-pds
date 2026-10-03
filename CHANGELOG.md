@@ -4,6 +4,18 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.3.0 — 2026-10-03
+
+- `modules/pds`: new input `verification_methods` (map of method id -> `did:key:z...`, default
+  `{}`). First boot publishes them into the account's did:plc document with a PLC update signed
+  by this PDS's rotation key (inside the PDS container, via its `@did-plc/lib`). Idempotent;
+  the account's `#atproto` key (refused as an input) and every other method are kept. Use it
+  for an application's own signing key, e.g. `org.openlore.application`.
+- `scripts/check-user-data.sh` parses the new wrapper and `node --check`s the PLC script.
+- Tests: input validation (no `atproto`, values must be `did:key:z...`) and the render.
+
+**Addresses changed: none.** With `verification_methods = {}`, `user_data` is unchanged.
+
 ## v1.2.1 — 2026-10-03
 
 - `modules/pds`: a first-boot script over EC2's 16 KiB `user_data` limit (swap plus the account

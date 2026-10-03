@@ -71,3 +71,38 @@ run "account_on_is_delivered_gzipped" {
     error_message = "The output must name the app-password parameter."
   }
 }
+
+run "verification_methods_refuse_the_atproto_key" {
+  command = plan
+
+  variables {
+    verification_methods = { atproto = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }
+  }
+
+  expect_failures = [var.verification_methods]
+}
+
+run "verification_methods_must_be_did_keys" {
+  command = plan
+
+  variables {
+    verification_methods = { "org.openlore.application" = "hex:0011" }
+  }
+
+  expect_failures = [var.verification_methods]
+}
+
+run "verification_methods_render_the_plc_step" {
+  command = plan
+
+  variables {
+    bootstrap_account    = true
+    swap_mb              = 1024
+    verification_methods = { "org.openlore.application" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }
+  }
+
+  assert {
+    condition     = aws_instance.pds.user_data_base64 != null
+    error_message = "The script with the PLC step is delivered gzipped."
+  }
+}
