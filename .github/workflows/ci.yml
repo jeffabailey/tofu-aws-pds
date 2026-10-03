@@ -1,0 +1,80 @@
+# Module CI. Static checks only: no AWS credentials exist in this workflow, and nothing it runs
+# can reach an AWS API. `tofu test` uses mock_provider throughout.
+#
+# Third-party actions are pinned by commit SHA (a tag is mutable).
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  TOFU_VERSION: "1.12.6"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+      - name: tofu fmt
+        run: tofu fmt -check -recursive -diff
+
+  module:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [modules/pds, modules/pds-bootstrap]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+      - name: init
+        working-directory: ${{ matrix.dir }}
+        run: tofu init -backend=false -input=false -no-color
+      - name: validate
+        working-directory: ${{ matrix.dir }}
+        run: tofu validate -no-color
+      # Golden render (TRB user_data byte identity), naming contract, invariants, AZ selection,
+      # bootstrap toggles and guards. All mocked.
+      - name: test
+        working-directory: ${{ matrix.dir }}
+        run: tofu test -no-color
+
+  example:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+      - name: validate examples/single-env
+        working-directory: examples/single-env
+        run: |
+          tofu init -backend=false -input=false -no-color
+          tofu validate -no-color
+
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      # `tofu validate` does not look inside a templatefile; this renders it and runs bash -n.
+      - name: rendered user_data parses as shell
+        run: scripts/check-user-data.sh
+      - name: no workflow may reach a destroy
+        run: scripts/check-no-destroy.sh .github

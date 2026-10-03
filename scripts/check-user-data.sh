@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Render the host bootstrap template and syntax-check it.
 #
+# Usage: check-user-data.sh [TEMPLATE]
+#   TEMPLATE defaults to modules/pds/user-data.sh.tftpl in this repository. A consumer can point
+#   it at the copy `tofu init` fetched, e.g. .terraform/modules/pds/modules/pds/user-data.sh.tftpl
+#
 # `tofu validate` checks HCL. It does not look inside a templatefile, so a shell syntax error in
 # user-data is invisible to every gate until cloud-init runs it on a real instance -- and by then
 # the instance exists, the volume is attached, and finding out costs a replacement.
@@ -10,55 +14,67 @@
 # "syntax error near unexpected token `fi'". No container ever started. The only symptom from
 # outside was a port that would not answer.
 #
-# This takes milliseconds. Run it before anything reaches a host.
+# The template is rendered by OpenTofu's own templatefile() in a throwaway root with no
+# providers, so directives (%{ if }) render exactly as they do in the module, and a variable
+# the template uses but this check does not pass is an error rather than a silent gap. Needs
+# `tofu` on PATH; no credentials, no network.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-TPL=deploy/tofu/modules/pds/user-data.sh.tftpl
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TPL="${1:-$HERE/../modules/pds/user-data.sh.tftpl}"
 [ -f "$TPL" ] || { echo "missing $TPL" >&2; exit 1; }
+TPL="$(cd "$(dirname "$TPL")" && pwd)/$(basename "$TPL")"
 
-RENDERED=$(mktemp); trap 'rm -f "$RENDERED"' EXIT
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-# Substitute the same names the module passes, with values shaped like the real ones.
-python3 - "$TPL" "$RENDERED" <<'PY'
-import re, sys
-tpl, out = sys.argv[1], sys.argv[2]
-vals = {
-    "hostname": "test.graph.savetherepublic.us",
-    "handle": "trb.test.graph.savetherepublic.us",
-    "namespace": "us.savetherepublic.graph.test",
-    "environment": "test",
-    "pds_image": "ghcr.io/bluesky-social/pds@sha256:" + "0" * 64,
-    "contact_ssm_parameter": "/trb/test/acme-contact-email",
-    "backup_bucket": "trb-identity-backup-000000000000",
-    "aws_region": "us-east-1",
+# Render the template with the same variable names the module passes, and values shaped like
+# real ones. Prints the rendered text to stdout.
+render() {
+  local dir="$WORK/render"
+  rm -rf "$dir"; mkdir -p "$dir"
+  cat > "$dir/main.tf" <<HCL
+output "user_data" {
+  value = templatefile("$TPL", {
+    hostname              = "test.pds.example.com"
+    handle                = "alice.test.pds.example.com"
+    namespace             = "com.example.pds.test"
+    environment           = "test"
+    pds_image             = "ghcr.io/bluesky-social/pds@sha256:$(printf '0%.0s' $(seq 1 64))"
+    contact_ssm_parameter = "/example/test/acme-contact-email"
+    backup_bucket         = "example-identity-backup-000000000000"
+    aws_region            = "us-east-1"
+  })
 }
-text = open(tpl).read()
-unknown = {m for m in re.findall(r'\$\{(\w+)\}', text)} - set(vals)
-if unknown:
-    print(f"template interpolates names this check does not know: {sorted(unknown)}", file=sys.stderr)
-    print("add them to deploy/check-user-data.sh, or the check is lying about coverage", file=sys.stderr)
-    raise SystemExit(1)
-open(out, "w").write(re.sub(r'\$\{(\w+)\}', lambda m: vals[m.group(1)], text))
-PY
+HCL
+  (
+    cd "$dir"
+    tofu init -no-color -input=false >/dev/null
+    tofu plan -no-color -input=false -out=render.tfplan >/dev/null
+    tofu apply -no-color -input=false render.tfplan >/dev/null
+    tofu output -raw user_data
+  )
+}
+
+fail=0
+check() { if ! eval "$2"; then echo "FAIL: $1" >&2; fail=1; fi; }
+
+RENDERED="$WORK/user-data.sh"
+render > "$RENDERED"
 
 bash -n "$RENDERED" || { echo "FAIL: rendered user-data is not valid shell" >&2; exit 1; }
 
 # Cheap structural assertions about things that have actually broken.
-fail=0
-check() { if ! eval "$2"; then echo "FAIL: $1" >&2; fail=1; fi; }
-
 check "secrets file is written before compose reads it" \
-      "grep -q 'secrets.env' '$RENDERED'"
+  "grep -q 'secrets.env' '$RENDERED'"
 check "a pre-split volume migrates its secrets rather than regenerating them" \
-      "grep -q 'NOT regenerating them' '$RENDERED'"
+  "grep -q 'NOT regenerating them' '$RENDERED'"
 check "the email config is both-or-neither (a partial config crash-loops the PDS)" \
-      "! grep -qE '^PDS_EMAIL_FROM_ADDRESS=.+' '$RENDERED'"
+  "! grep -qE '^PDS_EMAIL_FROM_ADDRESS=.+' '$RENDERED'"
 check "mkfs is guarded by a filesystem test" \
-      "grep -B4 'mkfs.ext4' '$RENDERED' | grep -q 'FSTYPE'"
+  "grep -B4 'mkfs.ext4' '$RENDERED' | grep -q 'FSTYPE'"
 check "on-demand TLS declares an ask endpoint (Caddy will not start without one)" \
-      "grep -q 'on_demand_tls' '$RENDERED'"
+  "grep -q 'on_demand_tls' '$RENDERED'"
 
 [ "$fail" -eq 0 ] || exit 1
 echo "user-data renders, parses as shell, and holds its structural invariants"

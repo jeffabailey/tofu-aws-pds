@@ -1,0 +1,13 @@
+# Provider binaries and the local plugin cache.
+.terraform/
+# Modules do not commit a lock file; each consuming root commits its own.
+.terraform.lock.hcl
+
+# State and saved plans contain resolved values in the clear. Never commit them.
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+*.tfvars
+.DS_Store

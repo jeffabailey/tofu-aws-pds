@@ -1,0 +1,12 @@
+{
+  "environment": "prod",
+  "atproto_namespace": "com.example",
+  "pds_hostname": "pds.example.com",
+  "handle": "alice.pds.example.com",
+  "tofu_state_key": "example/pds/prod.tfstate",
+  "lifecycle": "persistent",
+  "aws_region": "us-east-1",
+  "instance_type": "t4g.micro",
+  "data_volume_gb": 5,
+  "contact_ssm_parameter": "/example/prod/acme-contact-email"
+}
