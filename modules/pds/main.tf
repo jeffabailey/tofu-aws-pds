@@ -1,10 +1,14 @@
-# One PDS environment. Every name comes from the environment descriptor (ADR-012 §1); this
-# module invents none of them, which is what lets `test` and `prod` be the same code.
+# One PDS environment. Every name comes from the environment descriptor plus the caller's
+# `name_prefix`; this module invents none of them, which is what lets several environments and
+# several projects run the same code.
 #
-# The load-bearing decision is the separation of the instance from its volume (ADR-011): the
-# instance is cattle and may be replaced at will, the volume holds /pds -- the SQLite repo, the
-# PLC rotation key, the account -- and carries prevent_destroy. A did:plc is permanent and
-# public; records can be re-imported, an identity cannot be re-minted.
+# The load-bearing decision is the separation of the instance from its volume: the instance is
+# cattle and may be replaced at will, the volume holds /pds -- the SQLite repo, the PLC rotation
+# key, the account -- and carries prevent_destroy. A did:plc is permanent and public; records
+# can be re-imported, an identity cannot be re-minted.
+#
+# Extracted from the-reality-base deploy/tofu/modules/pds. Resource and data block names are a
+# contract with every consumer's state: renaming one is a major version (see CHANGELOG.md).
 
 terraform {
   required_version = ">= 1.10.0"
@@ -22,26 +26,33 @@ locals {
   namespace = var.descriptor.atproto_namespace
   handle    = var.descriptor.handle
 
-  name = "trb-pds-${local.env}"
+  name = "${var.name_prefix}-pds-${local.env}"
 
   tags = {
-    Project     = "the-reality-base"
+    Project     = var.project
     Environment = local.env
     ManagedBy   = "opentofu"
     Hostname    = local.hostname
   }
 
-  # ADR-012 §2, checked here as well as in CI. These are arithmetic, so a mismatch is a refusal
+  # Checked here as well as in a consumer's CI. These are arithmetic, so a mismatch is a refusal
   # rather than a discovery six steps later in a published record's $type.
   reversed_namespace = join(".", reverse(split(".", local.namespace)))
 }
 
-# A mismatch between the namespace and the hostname is the largest horizontal-integration risk
-# in the feature (Gap 3). It is caught at plan time, before any resource exists.
+# Naming invariants, caught at plan time before any resource exists.
+#
+# The namespace check is OPT-IN (`require_namespace_matches_hostname`). A consumer whose lexicon
+# namespace is the reverse of its PDS hostname (the-reality-base) turns it on; a consumer whose
+# namespace is a product domain hosted somewhere else (org.openlore on openlore.jeffbailey.us)
+# leaves it off. Both checks stay inside this ONE resource so its state address never moves.
+#
+# The handle check is always on: a handle that is not under the PDS hostname cannot resolve
+# through the PDS's own .well-known endpoint, for any consumer.
 resource "terraform_data" "name_invariants" {
   lifecycle {
     precondition {
-      condition     = local.reversed_namespace == local.hostname
+      condition     = !var.require_namespace_matches_hostname || local.reversed_namespace == local.hostname
       error_message = "reverse(atproto_namespace) must equal pds_hostname. Got '${local.reversed_namespace}' vs '${local.hostname}' in the ${local.env} descriptor."
     }
     precondition {

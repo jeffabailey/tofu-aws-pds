@@ -17,6 +17,9 @@
 mock_provider "aws" {}
 
 variables {
+  name_prefix = "trb"
+  project     = "the-reality-base"
+
   descriptor = {
     environment           = "test"
     atproto_namespace     = "us.savetherepublic.graph.test"

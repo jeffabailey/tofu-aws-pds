@@ -1,8 +1,46 @@
+variable "name_prefix" {
+  description = <<-EOT
+    Prefix for every resource name: the security group, instance and EIP are named
+    "<name_prefix>-pds-<environment>", the data volume "<name_prefix>-pds-<environment>-data".
+    The security group name is ForceNew, so an existing deployment must keep passing the prefix
+    it was created with (the-reality-base passes "trb").
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{1,20}$", var.name_prefix))
+    error_message = "name_prefix must match ^[a-z][a-z0-9-]{1,20}$ (lowercase, starts with a letter, 2-21 chars)."
+  }
+}
+
+variable "project" {
+  description = "Value of the Project tag on every resource. A tag only: changing it is an in-place update."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.project)) > 0
+    error_message = "project must not be empty."
+  }
+}
+
+variable "require_namespace_matches_hostname" {
+  description = <<-EOT
+    Refuse a plan unless reverse(descriptor.atproto_namespace) == descriptor.pds_hostname.
+    Off by default: a lexicon namespace is often a product domain that is not where the PDS is
+    hosted. Turn it on when your naming policy ties the two together. The handle-under-hostname
+    check is always on regardless of this setting.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "descriptor" {
   description = <<-EOT
-    The decoded environment descriptor from deploy/environments/<env>.json. This is the single
-    source of every name (ADR-012 §1) -- no caller passes a hostname or a namespace separately,
-    because two places holding one fact is exactly the failure Gap 3 describes.
+    The decoded environment descriptor (typically jsondecode(file(".../environments/<env>.json"))).
+    This is the single source of every name -- no caller passes a hostname or a namespace
+    separately, because two places holding one fact drift apart. `atproto_namespace` is rendered
+    into the host's PDS_ATPROTO_NAMESPACE (informational to the PDS) and checked only when
+    require_namespace_matches_hostname is true.
   EOT
 
   type = object({
@@ -20,7 +58,7 @@ variable "descriptor" {
 }
 
 variable "hosted_zone_id" {
-  description = "Route 53 zone for the delegated subdomain, from the bootstrap output."
+  description = "Route 53 zone the hostname and wildcard A records are written into."
   type        = string
 }
 
