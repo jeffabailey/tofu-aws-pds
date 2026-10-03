@@ -89,7 +89,10 @@ VMSH="$WORK/pds-ensure-verification-methods"
 VMJS="$WORK/ensure-verification-methods.cjs"
 sed -n "/<<'VMSHEOF'$/,/^VMSHEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$VMSH"
 sed -n "/<<'VMEOF'$/,/^VMEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$VMJS"
-[ -s "$VMSH" ] && [ -s "$VMJS" ] || { echo "FAIL: the verification-methods step is missing" >&2; exit 1; }
+if [ ! -s "$VMSH" ] || [ ! -s "$VMJS" ]; then
+  echo "FAIL: the verification-methods step is missing" >&2
+  exit 1
+fi
 bash -n "$VMSH" || { echo "FAIL: pds-ensure-verification-methods is not valid shell" >&2; exit 1; }
 if command -v shellcheck >/dev/null; then
   shellcheck "$VMSH" || { echo "FAIL: pds-ensure-verification-methods has shellcheck findings" >&2; exit 1; }

@@ -4,6 +4,13 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.4.1 — 2026-10-03
+
+- `scripts/check-user-data.sh`: an `A && B || C` test tripped CI's shellcheck (SC2015) since
+  v1.3.0; it is an explicit `if` now. Scripts only.
+
+**Addresses changed: none.** No module change: `user_data` is identical to v1.4.0.
+
 ## v1.4.0 — 2026-10-03
 
 - `modules/pds`: the identity backup (`pds-backup-identity`) RSA-encrypted the whole archive,
