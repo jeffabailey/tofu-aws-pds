@@ -50,32 +50,20 @@ run "account_off_is_byte_identical_to_v1_1_0" {
   }
 }
 
-run "account_on_renders_the_account_step" {
+# With swap AND the account step (OpenLore's shape) the script passes EC2's 16 KiB user_data
+# limit, so it is delivered gzipped. Its content is checked by scripts/check-user-data.sh, which renders the template
+# directly; here the delivery and the output are pinned.
+run "account_on_is_delivered_gzipped" {
   command = plan
 
   variables {
     bootstrap_account = true
+    swap_mb           = 1024
   }
 
   assert {
-    condition     = strcontains(aws_instance.pds.user_data, "      - /pds:/pds\n    # Loopback only") && strcontains(aws_instance.pds.user_data, "- \"127.0.0.1:3000:3000\"\nCOMPOSEEOF")
-    error_message = "The PDS port must be published on loopback only, inside the pds service."
-  }
-
-  assert {
-    condition     = strcontains(aws_instance.pds.user_data, "/usr/local/bin/pds-ensure-account \"trb.graph.savetherepublic.us\" \"/trb/prod\" \"$REGION\" \"$CONTACT_PARAM\"")
-    error_message = "The account step must run for the descriptor's handle with the /<prefix>/<env> SSM prefix."
-  }
-
-  # Idempotency and ordering: an existing handle exits before anything is created, and the
-  # account password is stored before the app password is minted.
-  assert {
-    condition = (
-      strcontains(aws_instance.pds.user_data, "resolveHandle?handle=$HANDLE") &&
-      length(split("--name \"$PREFIX/account-password\"", aws_instance.pds.user_data)[0]) <
-      length(split("createAppPassword", aws_instance.pds.user_data)[0])
-    )
-    error_message = "The account step must check for the handle first and store the account password before minting the app password."
+    condition     = aws_instance.pds.user_data == null && aws_instance.pds.user_data_base64 != null
+    error_message = "An over-16-KiB script must go through user_data_base64 (gzipped), not user_data."
   }
 
   assert {

@@ -4,6 +4,14 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.2.1 — 2026-10-03
+
+- `modules/pds`: a first-boot script over EC2's 16 KiB `user_data` limit (swap plus the account
+  step) failed validation. A script that fits is still passed as `user_data`; a larger one goes
+  through `user_data_base64` gzipped, which cloud-init unpacks.
+
+**Addresses changed: none.** Every script that fit before still uses `user_data`, unchanged.
+
 ## v1.2.0 — 2026-10-03
 
 - `modules/pds`: new input `bootstrap_account` (bool, default `false`). When true, first boot

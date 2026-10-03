@@ -32,6 +32,23 @@ locals {
   # bootstrap module grants the host write access to exactly these names.
   account_ssm_prefix = "/${var.name_prefix}/${local.env}"
 
+  # The first-boot script, rendered once; see aws_instance.pds for how it is delivered.
+  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    hostname              = local.hostname
+    handle                = local.handle
+    namespace             = local.namespace
+    environment           = local.env
+    pds_image             = var.pds_image
+    contact_ssm_parameter = var.descriptor.contact_ssm_parameter
+    backup_bucket         = var.backup_bucket
+    aws_region            = var.descriptor.aws_region
+    swap_mb               = var.swap_mb
+    bootstrap_account     = var.bootstrap_account
+    account_ssm_prefix    = local.account_ssm_prefix
+  })
+  # Bytes, not characters (the script has non-ASCII comments): base64 is 4 chars per 3 bytes.
+  user_data_fits = ceil(length(base64encode(local.user_data)) * 3 / 4) <= 16384
+
   tags = {
     Project     = var.project
     Environment = local.env
@@ -291,19 +308,10 @@ resource "aws_instance" "pds" {
     http_put_response_hop_limit = 2          # the container reads the instance role
   }
 
-  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    hostname              = local.hostname
-    handle                = local.handle
-    namespace             = local.namespace
-    environment           = local.env
-    pds_image             = var.pds_image
-    contact_ssm_parameter = var.descriptor.contact_ssm_parameter
-    backup_bucket         = var.backup_bucket
-    aws_region            = var.descriptor.aws_region
-    swap_mb               = var.swap_mb
-    bootstrap_account     = var.bootstrap_account
-    account_ssm_prefix    = local.account_ssm_prefix
-  })
+  # EC2 caps user_data at 16 KiB. A script that fits is passed as-is (so an existing host's
+  # user_data never changes); a larger one is gzipped, which cloud-init unpacks on boot.
+  user_data        = local.user_data_fits ? local.user_data : null
+  user_data_base64 = local.user_data_fits ? null : base64gzip(local.user_data)
 
   # Replacing the host on every new Amazon Linux release would be a surprise, not a decision.
   # The AMI is upgraded by setting var.ami_id in a commit.

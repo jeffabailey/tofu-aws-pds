@@ -100,6 +100,12 @@ check "bootstrap_account = false renders no account step" \
   "! grep -q 'pds-ensure-account' '$RENDERED'"
 check "bootstrap_account publishes the PDS port on loopback only" \
   "grep -q '127.0.0.1:3000:3000' '$ACCOUNTED' && ! grep -qE '\"3000:3000\"' '$ACCOUNTED'"
+check "the account step runs for the handle with the /<prefix>/<env> SSM prefix" \
+  "grep -qF '/usr/local/bin/pds-ensure-account \"alice.test.pds.example.com\" \"/example/test\"' '$ACCOUNTED'"
+check "an existing handle exits before anything is created" \
+  "[ \$(grep -n 'resolveHandle' '$ENSURE' | cut -d: -f1) -lt \$(grep -n 'createInviteCode' '$ENSURE' | cut -d: -f1) ]"
+check "the account password is stored before the app password is minted" \
+  "[ \$(grep -n 'account-password' '$ENSURE' | head -1 | cut -d: -f1) -lt \$(grep -n 'createAppPassword' '$ENSURE' | cut -d: -f1) ]"
 check "swap_mb = 1024 creates and enables a swap file" \
   "grep -q '^SWAP_MB=1024$' '$SWAPPED' && grep -q 'swapon' '$SWAPPED'"
 

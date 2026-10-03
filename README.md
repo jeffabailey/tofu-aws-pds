@@ -20,7 +20,7 @@ each in its own AWS account.
 
 ```hcl
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.2.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.2.1"
 
   name_prefix = "openlore"
   project     = "openlore"
