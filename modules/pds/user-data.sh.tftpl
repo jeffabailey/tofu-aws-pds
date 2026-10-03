@@ -22,7 +22,27 @@ PDS_IMAGE="${pds_image}"
 CONTACT_PARAM="${contact_ssm_parameter}"
 BACKUP_BUCKET="${backup_bucket}"
 REGION="${aws_region}"
-
+%{ if swap_mb > 0 }
+# -------------------------------------------------------------------------------------------
+# Swap, on the ROOT volume. Present only when the module's swap_mb > 0.
+#
+# A small instance (1 GiB) can be squeezed by `dnf update` or an image pull. Swap turns that
+# into slowness instead of an OOM kill. It lives on the root volume, never on /pds: the data
+# volume holds the identity and nothing disposable belongs on it. Safe to re-run: the file is
+# created once, the fstab line is added once, and swapon skips an active file. The fstab line
+# brings it back on every reboot; a replaced instance has a new root volume and recreates it.
+# -------------------------------------------------------------------------------------------
+SWAP_MB=${swap_mb}
+SWAPFILE=/swapfile
+if [ ! -f "$SWAPFILE" ]; then
+  echo "creating a $SWAP_MB MiB swap file at $SWAPFILE"
+  dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_MB" status=none
+  chmod 600 "$SWAPFILE"
+  mkswap "$SWAPFILE"
+fi
+grep -q "^$SWAPFILE " /etc/fstab || echo "$SWAPFILE none swap defaults 0 0" >> /etc/fstab
+swapon --show=NAME --noheadings | grep -qx "$SWAPFILE" || swapon "$SWAPFILE"
+%{ endif }
 dnf -q -y update
 dnf -q -y install docker jq awscli-2
 systemctl enable --now docker

@@ -296,6 +296,7 @@ resource "aws_instance" "pds" {
     contact_ssm_parameter = var.descriptor.contact_ssm_parameter
     backup_bucket         = var.backup_bucket
     aws_region            = var.descriptor.aws_region
+    swap_mb               = var.swap_mb
   })
 
   # Replacing the host on every new Amazon Linux release would be a surprise, not a decision.

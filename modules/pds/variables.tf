@@ -122,3 +122,20 @@ variable "ssh_ingress_cidr" {
     error_message = "Refusing to open SSH to the whole internet on the host holding the PLC rotation key."
   }
 }
+
+variable "swap_mb" {
+  description = <<-EOT
+    Size in MiB of a swap file created on the ROOT volume at first boot. 0 (the default) adds no
+    swap and renders user_data byte-identical to v1.0.0, so existing deployments plan no change.
+    1024 suits a t4g.micro (1 GiB RAM). Changing it on a live host changes user_data, which is an
+    in-place stop/start, and cloud-init does not re-run on that restart: replace the instance (it
+    is cattle) for a new value to take effect.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.swap_mb >= 0 && floor(var.swap_mb) == var.swap_mb
+    error_message = "swap_mb must be a whole number >= 0."
+  }
+}

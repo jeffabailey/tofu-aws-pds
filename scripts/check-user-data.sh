@@ -29,9 +29,9 @@ TPL="$(cd "$(dirname "$TPL")" && pwd)/$(basename "$TPL")"
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 # Render the template with the same variable names the module passes, and values shaped like
-# real ones. Prints the rendered text to stdout.
+# real ones. $1 is swap_mb. Prints the rendered text to stdout.
 render() {
-  local dir="$WORK/render"
+  local swap_mb="$1" dir="$WORK/render"
   rm -rf "$dir"; mkdir -p "$dir"
   cat > "$dir/main.tf" <<HCL
 output "user_data" {
@@ -44,6 +44,7 @@ output "user_data" {
     contact_ssm_parameter = "/example/test/acme-contact-email"
     backup_bucket         = "example-identity-backup-000000000000"
     aws_region            = "us-east-1"
+    swap_mb               = $swap_mb
   })
 }
 HCL
@@ -59,10 +60,14 @@ HCL
 fail=0
 check() { if ! eval "$2"; then echo "FAIL: $1" >&2; fail=1; fi; }
 
+# swap_mb = 0 is the default render; 1024 exercises the optional swap block.
 RENDERED="$WORK/user-data.sh"
-render > "$RENDERED"
+SWAPPED="$WORK/user-data-swap.sh"
+render 0 > "$RENDERED"
+render 1024 > "$SWAPPED"
 
-bash -n "$RENDERED" || { echo "FAIL: rendered user-data is not valid shell" >&2; exit 1; }
+bash -n "$RENDERED" || { echo "FAIL: rendered user-data (swap_mb=0) is not valid shell" >&2; exit 1; }
+bash -n "$SWAPPED" || { echo "FAIL: rendered user-data (swap_mb=1024) is not valid shell" >&2; exit 1; }
 
 # Cheap structural assertions about things that have actually broken.
 check "secrets file is written before compose reads it" \
@@ -75,6 +80,10 @@ check "mkfs is guarded by a filesystem test" \
   "grep -B4 'mkfs.ext4' '$RENDERED' | grep -q 'FSTYPE'"
 check "on-demand TLS declares an ask endpoint (Caddy will not start without one)" \
   "grep -q 'on_demand_tls' '$RENDERED'"
+check "swap_mb = 0 renders no swap step" \
+  "! grep -q 'swapon' '$RENDERED'"
+check "swap_mb = 1024 creates and enables a swap file" \
+  "grep -q '^SWAP_MB=1024$' '$SWAPPED' && grep -q 'swapon' '$SWAPPED'"
 
 [ "$fail" -eq 0 ] || exit 1
 echo "user-data renders, parses as shell, and holds its structural invariants"

@@ -20,7 +20,7 @@ each in its own AWS account.
 
 ```hcl
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.0.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.1.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -29,6 +29,7 @@ module "pds" {
   hosted_zone_id        = "Z0123456789ABCDEFGHIJ"
   instance_profile_name = "openlore-pds-host-prod"           # pds-bootstrap output
   backup_bucket         = "openlore-identity-backup-111122223333" # pds-bootstrap output
+  swap_mb               = 1024 # v1.1.0+: 1 GiB swap on the root volume (t4g.micro)
 }
 ```
 
@@ -50,6 +51,7 @@ profile, the backup bucket and a default VPC to exist at plan time.
 | `ami_id` | string, `null` | Null = latest AL2023 arm64 at create time; `ignore_changes = [ami]` |
 | `ssh_key_name` | string, `null` | Break-glass only |
 | `ssh_ingress_cidr` | string, `null` | One CIDR; `0.0.0.0/0` is refused |
+| `swap_mb` (v1.1.0) | number, `0`, `>= 0` | Swap file on the root volume at first boot. `0` renders `user_data` byte-identical to v1.0.0 |
 
 `descriptor` fields: `environment`, `atproto_namespace`, `pds_hostname`, `handle`,
 `tofu_state_key`, `lifecycle`, `aws_region`, `instance_type`, `data_volume_gb`,
