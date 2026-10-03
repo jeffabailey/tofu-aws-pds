@@ -28,6 +28,10 @@ locals {
 
   name = "${var.name_prefix}-pds-${local.env}"
 
+  # Where the host stores the first account's passwords when bootstrap_account is on. The
+  # bootstrap module grants the host write access to exactly these names.
+  account_ssm_prefix = "/${var.name_prefix}/${local.env}"
+
   tags = {
     Project     = var.project
     Environment = local.env
@@ -297,6 +301,8 @@ resource "aws_instance" "pds" {
     backup_bucket         = var.backup_bucket
     aws_region            = var.descriptor.aws_region
     swap_mb               = var.swap_mb
+    bootstrap_account     = var.bootstrap_account
+    account_ssm_prefix    = local.account_ssm_prefix
   })
 
   # Replacing the host on every new Amazon Linux release would be a surprise, not a decision.

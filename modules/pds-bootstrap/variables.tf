@@ -162,3 +162,13 @@ variable "apply_job_workflow_ref" {
   type        = string
   default     = null
 }
+
+variable "bootstrap_account" {
+  description = <<-EOT
+    Let each environment's host write its first account's passwords to SSM SecureString
+    /<name_prefix>/<environment>/account-password and .../cli-app-password. Pair with
+    bootstrap_account = true on modules/pds. false (the default) leaves the host policy unchanged.
+  EOT
+  type        = bool
+  default     = false
+}

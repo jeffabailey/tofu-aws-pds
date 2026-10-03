@@ -29,9 +29,9 @@ TPL="$(cd "$(dirname "$TPL")" && pwd)/$(basename "$TPL")"
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 # Render the template with the same variable names the module passes, and values shaped like
-# real ones. $1 is swap_mb. Prints the rendered text to stdout.
+# real ones. $1 is swap_mb, $2 bootstrap_account (default false). Prints the rendered text.
 render() {
-  local swap_mb="$1" dir="$WORK/render"
+  local swap_mb="$1" account="${2:-false}" dir="$WORK/render"
   rm -rf "$dir"; mkdir -p "$dir"
   cat > "$dir/main.tf" <<HCL
 output "user_data" {
@@ -45,6 +45,8 @@ output "user_data" {
     backup_bucket         = "example-identity-backup-000000000000"
     aws_region            = "us-east-1"
     swap_mb               = $swap_mb
+    bootstrap_account     = $account
+    account_ssm_prefix    = "/example/test"
   })
 }
 HCL
@@ -65,9 +67,21 @@ RENDERED="$WORK/user-data.sh"
 SWAPPED="$WORK/user-data-swap.sh"
 render 0 > "$RENDERED"
 render 1024 > "$SWAPPED"
+ACCOUNTED="$WORK/user-data-account.sh"
+render 1024 true > "$ACCOUNTED"
 
 bash -n "$RENDERED" || { echo "FAIL: rendered user-data (swap_mb=0) is not valid shell" >&2; exit 1; }
 bash -n "$SWAPPED" || { echo "FAIL: rendered user-data (swap_mb=1024) is not valid shell" >&2; exit 1; }
+bash -n "$ACCOUNTED" || { echo "FAIL: rendered user-data (bootstrap_account) is not valid shell" >&2; exit 1; }
+
+# The account script is a quoted heredoc, which `bash -n` above only sees as text: parse it too.
+ENSURE="$WORK/pds-ensure-account"
+sed -n "/<<'ACCOUNTEOF'$/,/^ACCOUNTEOF$/p" "$ACCOUNTED" | sed '1d;$d' > "$ENSURE"
+[ -s "$ENSURE" ] || { echo "FAIL: pds-ensure-account is missing from the bootstrap_account render" >&2; exit 1; }
+bash -n "$ENSURE" || { echo "FAIL: pds-ensure-account is not valid shell" >&2; exit 1; }
+if command -v shellcheck >/dev/null; then
+  shellcheck "$ENSURE" || { echo "FAIL: pds-ensure-account has shellcheck findings" >&2; exit 1; }
+fi
 
 # Cheap structural assertions about things that have actually broken.
 check "secrets file is written before compose reads it" \
@@ -82,6 +96,10 @@ check "on-demand TLS declares an ask endpoint (Caddy will not start without one)
   "grep -q 'on_demand_tls' '$RENDERED'"
 check "swap_mb = 0 renders no swap step" \
   "! grep -q 'swapon' '$RENDERED'"
+check "bootstrap_account = false renders no account step" \
+  "! grep -q 'pds-ensure-account' '$RENDERED'"
+check "bootstrap_account publishes the PDS port on loopback only" \
+  "grep -q '127.0.0.1:3000:3000' '$ACCOUNTED' && ! grep -qE '\"3000:3000\"' '$ACCOUNTED'"
 check "swap_mb = 1024 creates and enables a swap file" \
   "grep -q '^SWAP_MB=1024$' '$SWAPPED' && grep -q 'swapon' '$SWAPPED'"
 

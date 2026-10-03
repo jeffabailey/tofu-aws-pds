@@ -139,3 +139,17 @@ variable "swap_mb" {
     error_message = "swap_mb must be a whole number >= 0."
   }
 }
+
+variable "bootstrap_account" {
+  description = <<-EOT
+    Create the descriptor's handle as the PDS's first account at first boot, with an app password
+    for CLI use, and store both passwords as SSM SecureString parameters
+    /<name_prefix>/<environment>/account-password and .../cli-app-password (the host role needs
+    write access: set bootstrap_account on modules/pds-bootstrap too). The account email is the
+    ACME contact. Idempotent: an existing handle is left alone. false (the default) renders
+    user_data byte-identical to v1.1.0. Like swap_mb, turning it on for a live host changes
+    user_data, and cloud-init only runs on a new instance: replace the instance to apply it.
+  EOT
+  type        = bool
+  default     = false
+}

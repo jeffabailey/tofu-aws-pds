@@ -376,6 +376,36 @@ data "aws_iam_policy_document" "host_permissions" {
     }
   }
 
+  # bootstrap_account: the host stores its first account's passwords under /<prefix>/<env>/ --
+  # these two names only, so it still cannot touch any other parameter.
+  dynamic "statement" {
+    for_each = var.bootstrap_account ? [each.key] : []
+    content {
+      sid     = "WriteOwnAccountPasswords"
+      effect  = "Allow"
+      actions = ["ssm:PutParameter", "ssm:GetParameter"]
+      resources = [
+        "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.name_prefix}/${statement.value}/account-password",
+        "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.name_prefix}/${statement.value}/cli-app-password",
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.bootstrap_account ? [each.key] : []
+    content {
+      sid       = "EncryptOwnAccountPasswords"
+      effect    = "Allow"
+      actions   = ["kms:Encrypt", "kms:GenerateDataKey"]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${var.aws_region}.amazonaws.com"]
+      }
+    }
+  }
+
   # Write-and-read its own identity archive. No delete: a host that is compromised must not be
   # able to remove the backup that recovers from it.
   statement {

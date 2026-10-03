@@ -28,3 +28,11 @@ output "data_volume_id" {
 # Nothing sensitive is output, and nothing can be: every credential is generated on the host and
 # never becomes an OpenTofu value (ADR-013 §3). If this list ever needed a `sensitive = true`,
 # that would be the bug.
+
+output "account_ssm_parameters" {
+  description = "SSM parameter names holding the first account's passwords, when bootstrap_account is on."
+  value = var.bootstrap_account ? {
+    account_password = "${local.account_ssm_prefix}/account-password"
+    cli_app_password = "${local.account_ssm_prefix}/cli-app-password"
+  } : null
+}

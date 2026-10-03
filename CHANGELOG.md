@@ -4,6 +4,25 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.2.0 — 2026-10-03
+
+- `modules/pds`: new input `bootstrap_account` (bool, default `false`). When true, first boot
+  creates the descriptor's `handle` as the PDS's first account (email = the ACME contact) plus a
+  `deploy-cli` app password, and stores both as SSM SecureString parameters
+  `/<name_prefix>/<environment>/account-password` and `.../cli-app-password`. Idempotent: an
+  existing handle is left alone. The PDS port is published on `127.0.0.1:3000` only, for this
+  step. New output `account_ssm_parameters`.
+- `modules/pds-bootstrap`: new input `bootstrap_account` (bool, default `false`) that lets each
+  host write exactly those two parameters.
+- `scripts/check-user-data.sh` also renders `bootstrap_account = true` and parses (and
+  shellchecks) the embedded `pds-ensure-account` script.
+- Tests: `account.tftest.hcl` (off matches the golden hash; on renders the step), and two
+  bootstrap runs pinning the IAM grant.
+
+**Addresses changed: none.** With `bootstrap_account = false`, `user_data` and the host policy
+are unchanged. Turning it on for a live host changes `user_data`; replace the instance for it to
+apply (the data volume, and so the identity, survives).
+
 ## v1.1.0 — 2026-10-02
 
 - `modules/pds`: new input `swap_mb` (number, default `0`, must be `>= 0`). When greater than 0,

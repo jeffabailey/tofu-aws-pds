@@ -181,3 +181,44 @@ run "record_outside_the_zone_is_refused" {
 
   expect_failures = [terraform_data.zone_is_the_delegated_one]
 }
+
+# bootstrap_account: the host may write exactly its two account-password parameters, and only
+# when asked to.
+run "account_passwords_are_writable_only_when_asked" {
+  command = plan
+
+  variables {
+    create_state_bucket  = false
+    state_bucket_name    = "jeffbaileyterraformstate"
+    create_oidc_provider = false
+    enable_ci_roles      = false
+    bootstrap_account    = true
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in data.aws_iam_policy_document.host_permissions["prod"].statement : s.resources
+      if s.sid == "WriteOwnAccountPasswords"
+      ])) == toset([
+      "arn:aws:ssm:us-east-1:091153021562:parameter/openlore/prod/account-password",
+      "arn:aws:ssm:us-east-1:091153021562:parameter/openlore/prod/cli-app-password",
+    ])
+    error_message = "The host must be able to write exactly /openlore/prod/{account-password,cli-app-password}."
+  }
+}
+
+run "no_account_write_by_default" {
+  command = plan
+
+  variables {
+    create_state_bucket  = false
+    state_bucket_name    = "jeffbaileyterraformstate"
+    create_oidc_provider = false
+    enable_ci_roles      = false
+  }
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.host_permissions["prod"].statement : s if s.sid == "WriteOwnAccountPasswords"]) == 0
+    error_message = "The host policy must not change when bootstrap_account is off."
+  }
+}

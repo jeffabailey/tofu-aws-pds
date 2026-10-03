@@ -262,6 +262,11 @@ services:
       - /pds/pds.env
     volumes:
       - /pds:/pds
+%{ if bootstrap_account ~}
+    # Loopback only, so pds-ensure-account can reach the PDS before TLS exists. Never public.
+    ports:
+      - "127.0.0.1:3000:3000"
+%{ endif ~}
 COMPOSEEOF
 
 cd /pds
@@ -292,6 +297,62 @@ else
 fi
 BACKUPEOF
 chmod +x /usr/local/bin/pds-backup-identity
+%{ if bootstrap_account ~}
+
+# -------------------------------------------------------------------------------------------
+# The first account: the descriptor's handle, created once, by the deployment itself.
+#
+# Idempotent: a handle that already resolves on this PDS is left alone, so a rebuilt instance
+# handed the same volume does nothing. The passwords are generated HERE and go straight to SSM
+# SecureString under ${account_ssm_prefix}/ -- never through OpenTofu state, never to a file.
+# The account password is stored before the app password is minted, so a failure part way
+# never loses the only way back into the account. A failure here does not fail the boot: the
+# PDS is already serving, and the step can be re-run by hand.
+# -------------------------------------------------------------------------------------------
+cat > /usr/local/bin/pds-ensure-account <<'ACCOUNTEOF'
+#!/usr/bin/env bash
+# Usage: pds-ensure-account <handle> <ssm-prefix> <region> <contact-ssm-parameter>
+set -euo pipefail
+HANDLE="$1"; PREFIX="$2"; REGION="$3"; CONTACT_PARAM="$4"
+PDS=http://127.0.0.1:3000
+
+for _ in $(seq 1 60); do
+  curl -sf "$PDS/xrpc/_health" >/dev/null && break
+  sleep 5
+done
+
+if curl -sf "$PDS/xrpc/com.atproto.identity.resolveHandle?handle=$HANDLE" >/dev/null; then
+  echo "account $HANDLE already exists; nothing to do"
+  exit 0
+fi
+
+# shellcheck disable=SC1091
+. /pds/secrets.env
+EMAIL=$(aws ssm get-parameter --with-decryption --region "$REGION" --name "$CONTACT_PARAM" \
+  --query Parameter.Value --output text)
+INVITE=$(curl -sf -u "admin:$PDS_ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"useCount":1}' "$PDS/xrpc/com.atproto.server.createInviteCode" | jq -r .code)
+PASSWORD=$(openssl rand -hex 24)
+ACCOUNT=$(jq -n --arg e "$EMAIL" --arg h "$HANDLE" --arg p "$PASSWORD" --arg i "$INVITE" \
+    '{email: $e, handle: $h, password: $p, inviteCode: $i}' \
+  | curl -sf -H 'Content-Type: application/json' -d @- \
+    "$PDS/xrpc/com.atproto.server.createAccount")
+aws ssm put-parameter --region "$REGION" --type SecureString --overwrite \
+  --name "$PREFIX/account-password" --value "$PASSWORD" >/dev/null
+
+JWT=$(echo "$ACCOUNT" | jq -r .accessJwt)
+APP_PASSWORD=$(curl -sf -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -d '{"name":"deploy-cli"}' "$PDS/xrpc/com.atproto.server.createAppPassword" | jq -r .password)
+aws ssm put-parameter --region "$REGION" --type SecureString --overwrite \
+  --name "$PREFIX/cli-app-password" --value "$APP_PASSWORD" >/dev/null
+
+echo "created $HANDLE as $(echo "$ACCOUNT" | jq -r .did)"
+echo "passwords in SSM: $PREFIX/account-password, $PREFIX/cli-app-password"
+ACCOUNTEOF
+chmod +x /usr/local/bin/pds-ensure-account
+/usr/local/bin/pds-ensure-account "${handle}" "${account_ssm_prefix}" "$REGION" "$CONTACT_PARAM" \
+  || echo "WARNING: account bootstrap failed; re-run /usr/local/bin/pds-ensure-account by hand" >&2
+%{ endif ~}
 
 echo "=== bootstrap complete: https://$HOSTNAME_FQDN ==="
 echo "NOTE: TLS will fail until $HOSTNAME_FQDN resolves publicly. See the delegation output."
