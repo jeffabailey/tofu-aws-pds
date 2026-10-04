@@ -172,3 +172,13 @@ variable "bootstrap_account" {
   type        = bool
   default     = false
 }
+
+variable "backup_metrics" {
+  description = <<-EOT
+    Pair with backup_alarm on modules/pds. Lets each host publish the PDS/Backup metric, and the
+    CI plan/apply roles (when enabled) read and manage the <name_prefix>-pds-* backup-alarm SNS
+    topic and CloudWatch alarm. false (the default) leaves every policy unchanged.
+  EOT
+  type        = bool
+  default     = false
+}

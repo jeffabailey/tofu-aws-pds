@@ -2,6 +2,9 @@
 # of render_identity.tftest.hcl); on renders the loopback port and the idempotent account step.
 
 mock_provider "aws" {
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:us-east-1:415898136109:trb-pds-prod-backup-alarm" }
+  }
   mock_data "aws_subnets" {
     defaults = { ids = ["subnet-0001"] }
   }
@@ -132,4 +135,64 @@ run "backup_schedule_refuses_unit_file_injection" {
   }
 
   expect_failures = [var.backup_on_calendar]
+}
+
+run "backup_alarm_off_creates_nothing" {
+  command = plan
+
+  variables {
+    backup_on_calendar = "daily"
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.backup_missing) == 0 && length(aws_sns_topic.backup_alarm) == 0 && output.backup_alarm_topic_arn == null
+    error_message = "No alarm resources unless backup_alarm is on."
+  }
+
+  assert {
+    condition     = !strcontains(aws_instance.pds.user_data, "put-metric-data")
+    error_message = "No metric publish unless backup_alarm is on."
+  }
+}
+
+run "backup_alarm_fires_after_two_missed_days" {
+  command = plan
+
+  variables {
+    backup_on_calendar = "daily"
+    backup_alarm       = true
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.backup_missing[0].alarm_name == "trb-pds-prod-backup-missing" &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].namespace == "PDS/Backup" &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].dimensions.Pds == "trb-pds-prod" &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].period == 86400 &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].datapoints_to_alarm == 2 &&
+      aws_cloudwatch_metric_alarm.backup_missing[0].treat_missing_data == "breaching"
+    )
+    error_message = "The alarm must fire only after two whole UTC days without a successful backup."
+  }
+
+  assert {
+    condition     = aws_sns_topic.backup_alarm[0].name == "trb-pds-prod-backup-alarm"
+    error_message = "The topic follows the <prefix>-pds-<env> naming the CI roles are scoped to."
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.pds.user_data, "ExecStartPost=/usr/bin/aws cloudwatch put-metric-data --region us-east-1 --namespace PDS/Backup --metric-name ArchiveUploaded --dimensions Pds=trb-pds-prod --value 1")
+    error_message = "The backup service must publish the metric the alarm watches, only after success."
+  }
+}
+
+run "backup_alarm_needs_a_schedule" {
+  command = plan
+
+  variables {
+    backup_alarm = true
+  }
+
+  expect_failures = [terraform_data.backup_alarm_needs_a_schedule]
 }

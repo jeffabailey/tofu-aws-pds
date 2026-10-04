@@ -47,6 +47,8 @@ locals {
     account_ssm_prefix    = local.account_ssm_prefix
     verification_methods  = var.verification_methods
     backup_on_calendar    = var.backup_on_calendar
+    backup_alarm          = var.backup_alarm
+    pds_name              = local.name
   })
   # Bytes, not characters (the script has non-ASCII comments): base64 is 4 chars per 3 bytes.
   user_data_fits = ceil(length(base64encode(local.user_data)) * 3 / 4) <= 16384
@@ -357,4 +359,53 @@ resource "aws_route53_record" "wildcard" {
   type    = "A"
   ttl     = 300
   records = [aws_eip.pds.public_ip]
+}
+
+# ---------------------------------------------------------------------------------------------
+# Backup alarm (backup_alarm). The host publishes PDS/Backup ArchiveUploaded = 1 after every
+# successful scheduled backup; this fires when two consecutive UTC days pass without one. One
+# day would false-alarm every night in the minutes between midnight and the jittered run.
+# The SNS topic has no subscription here on purpose: an email address in OpenTofu state is
+# exactly what a contact-address policy forbids. Subscribe out of band (see README).
+# ---------------------------------------------------------------------------------------------
+
+resource "terraform_data" "backup_alarm_needs_a_schedule" {
+  count = var.backup_alarm ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.backup_on_calendar != ""
+      error_message = "backup_alarm watches the scheduled backup: set backup_on_calendar too."
+    }
+  }
+}
+
+resource "aws_sns_topic" "backup_alarm" {
+  count = var.backup_alarm ? 1 : 0
+
+  name = "${local.name}-backup-alarm"
+  tags = merge(local.tags, { Name = "${local.name}-backup-alarm" })
+}
+
+resource "aws_cloudwatch_metric_alarm" "backup_missing" {
+  count = var.backup_alarm ? 1 : 0
+
+  alarm_name        = "${local.name}-backup-missing"
+  alarm_description = "No successful identity backup from ${local.hostname} for two consecutive UTC days. Check `journalctl -u pds-backup-identity` on the host."
+
+  namespace           = "PDS/Backup"
+  metric_name         = "ArchiveUploaded"
+  dimensions          = { Pds = local.name }
+  statistic           = "Sum"
+  period              = 86400
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+
+  alarm_actions = [aws_sns_topic.backup_alarm[0].arn]
+  ok_actions    = [aws_sns_topic.backup_alarm[0].arn]
+
+  tags = merge(local.tags, { Name = "${local.name}-backup-missing" })
 }

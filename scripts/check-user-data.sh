@@ -32,6 +32,9 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # real ones. $1 is swap_mb, $2 bootstrap_account (default false). Prints the rendered text.
 render() {
   local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" schedule="${4:-}" dir="$WORK/render"
+  # The alarm needs a schedule; render it whenever one is given.
+  local alarm=false
+  if [ -n "$schedule" ]; then alarm=true; fi
   rm -rf "$dir"; mkdir -p "$dir"
   cat > "$dir/main.tf" <<HCL
 output "user_data" {
@@ -49,6 +52,8 @@ output "user_data" {
     account_ssm_prefix    = "/example/test"
     verification_methods  = $methods
     backup_on_calendar    = "$schedule"
+    backup_alarm          = $alarm
+    pds_name              = "example-pds-test"
   })
 }
 HCL
@@ -119,6 +124,8 @@ check "no verification methods renders no PLC step" \
   "! grep -q 'pds-ensure-verification-methods' '$RENDERED'"
 check "the PLC step runs for the handle with the methods as JSON" \
   "grep -qF '/usr/local/bin/pds-ensure-verification-methods \"alice.test.pds.example.com\" '\''{\"org.example.app\":\"did:key:z6Mk' '$ACCOUNTED'"
+check "the backup alarm metric is published only after a successful backup" \
+  "grep -q '^ExecStartPost=/usr/bin/aws cloudwatch put-metric-data .*--namespace PDS/Backup .*--dimensions Pds=example-pds-test' '$ACCOUNTED'"
 check "no backup schedule installs no timer" \
   "! grep -q 'pds-backup-identity.timer' '$RENDERED'"
 check "a backup schedule installs the timer, gated on the public key" \

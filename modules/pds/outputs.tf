@@ -36,3 +36,8 @@ output "account_ssm_parameters" {
     cli_app_password = "${local.account_ssm_prefix}/cli-app-password"
   } : null
 }
+
+output "backup_alarm_topic_arn" {
+  description = "SNS topic the backup alarm notifies (subscribe to it out of band), when backup_alarm is on."
+  value       = var.backup_alarm ? aws_sns_topic.backup_alarm[0].arn : null
+}

@@ -222,3 +222,39 @@ run "no_account_write_by_default" {
     error_message = "The host policy must not change when bootstrap_account is off."
   }
 }
+
+run "backup_metrics_lets_the_host_publish_only_its_namespace" {
+  command = plan
+
+  variables {
+    create_state_bucket  = false
+    state_bucket_name    = "jeffbaileyterraformstate"
+    create_oidc_provider = false
+    enable_ci_roles      = false
+    backup_metrics       = true
+  }
+
+  assert {
+    condition = anytrue([
+      for s in data.aws_iam_policy_document.host_permissions["prod"].statement :
+      s.sid == "PublishBackupMetric" && toset(s.actions) == toset(["cloudwatch:PutMetricData"])
+    ])
+    error_message = "The host must be able to put the PDS/Backup metric."
+  }
+}
+
+run "no_metric_grant_by_default" {
+  command = plan
+
+  variables {
+    create_state_bucket  = false
+    state_bucket_name    = "jeffbaileyterraformstate"
+    create_oidc_provider = false
+    enable_ci_roles      = false
+  }
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.host_permissions["prod"].statement : s if s.sid == "PublishBackupMetric"]) == 0
+    error_message = "The host policy must not change when backup_metrics is off."
+  }
+}

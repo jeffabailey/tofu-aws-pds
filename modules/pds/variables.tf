@@ -196,3 +196,17 @@ variable "backup_on_calendar" {
     error_message = "backup_on_calendar must be a plain systemd OnCalendar expression."
   }
 }
+
+variable "backup_alarm" {
+  description = <<-EOT
+    Alarm when the scheduled identity backup has not succeeded for two consecutive UTC days.
+    Creates an SNS topic (output backup_alarm_topic_arn) and a CloudWatch alarm, and makes the
+    backup service publish PDS/Backup ArchiveUploaded after each success (the host role needs
+    backup_metrics = true on modules/pds-bootstrap). Needs backup_on_calendar. The topic has no
+    subscription: add one out of band, e.g. `aws sns subscribe --protocol email`, so no address
+    lands in state. About $0.40/month (one custom metric, one alarm). false: nothing created and
+    user_data unchanged.
+  EOT
+  type        = bool
+  default     = false
+}

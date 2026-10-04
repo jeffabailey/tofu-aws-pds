@@ -338,6 +338,10 @@ ConditionPathExists=/pds/backup-pubkey.pem
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/pds-backup-identity
+%{ if backup_alarm ~}
+# Runs only when the backup succeeded; the backup_alarm CloudWatch alarm watches for it.
+ExecStartPost=/usr/bin/aws cloudwatch put-metric-data --region ${aws_region} --namespace PDS/Backup --metric-name ArchiveUploaded --dimensions Pds=${pds_name} --value 1
+%{ endif ~}
 UNITEOF
 cat > /etc/systemd/system/pds-backup-identity.timer <<UNITEOF
 [Unit]

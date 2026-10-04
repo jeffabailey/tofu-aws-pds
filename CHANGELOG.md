@@ -4,6 +4,22 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.6.0 — 2026-10-04
+
+- `modules/pds`: new input `backup_alarm` (bool, default `false`, needs `backup_on_calendar`).
+  The backup service publishes `PDS/Backup ArchiveUploaded` (dimension `Pds=<prefix>-pds-<env>`)
+  after each success; a CloudWatch alarm `<prefix>-pds-<env>-backup-missing` fires after two
+  consecutive UTC days without one (one day would false-alarm nightly before the jittered run),
+  notifying SNS topic `<prefix>-pds-<env>-backup-alarm` (output `backup_alarm_topic_arn`). The
+  topic gets no subscription from OpenTofu, so no email address lands in state: subscribe out
+  of band (`aws sns subscribe --protocol email`). About $0.40/month.
+- `modules/pds-bootstrap`: new input `backup_metrics` (default `false`): the host may
+  `cloudwatch:PutMetricData` in `PDS/Backup` only; the CI plan/apply roles may read/manage the
+  `<prefix>-pds-*` topic and alarm.
+
+**Addresses changed: none.** New resources only when `backup_alarm = true`; with it off,
+`user_data` and every policy are unchanged.
+
 ## v1.5.0 — 2026-10-04
 
 - `modules/pds`: new input `backup_on_calendar` (systemd OnCalendar, default `""`). When set,

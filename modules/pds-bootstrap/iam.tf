@@ -156,6 +156,25 @@ data "aws_iam_policy_document" "plan_permissions" {
     resources = [local.state_bucket_arn]
   }
 
+  # backup_metrics: read the backup-alarm topic and alarm modules/pds manages.
+  dynamic "statement" {
+    for_each = var.backup_metrics ? [1] : []
+    content {
+      sid    = "ReadBackupAlarm"
+      effect = "Allow"
+      actions = [
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+      ]
+      resources = [
+        "arn:aws:sns:${var.aws_region}:${local.account_id}:${var.name_prefix}-pds-*",
+        "arn:aws:cloudwatch:${var.aws_region}:${local.account_id}:alarm:${var.name_prefix}-pds-*",
+      ]
+    }
+  }
+
   statement {
     sid    = "DescribeInfrastructure"
     effect = "Allow"
@@ -216,6 +235,34 @@ data "aws_iam_policy_document" "apply_permissions" {
     effect    = "Allow"
     actions   = ["s3:ListBucket", "s3:GetBucketVersioning", "s3:GetBucketLocation"]
     resources = [local.state_bucket_arn]
+  }
+
+  # backup_metrics: manage the backup-alarm topic and alarm, and only those (by name).
+  dynamic "statement" {
+    for_each = var.backup_metrics ? [1] : []
+    content {
+      sid    = "ManageBackupAlarm"
+      effect = "Allow"
+      actions = [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+      ]
+      resources = [
+        "arn:aws:sns:${var.aws_region}:${local.account_id}:${var.name_prefix}-pds-*",
+        "arn:aws:cloudwatch:${var.aws_region}:${local.account_id}:alarm:${var.name_prefix}-pds-*",
+      ]
+    }
   }
 
   statement {
@@ -402,6 +449,22 @@ data "aws_iam_policy_document" "host_permissions" {
         test     = "StringEquals"
         variable = "kms:ViaService"
         values   = ["ssm.${var.aws_region}.amazonaws.com"]
+      }
+    }
+  }
+
+  # backup_metrics: the scheduled backup reports success as a PDS/Backup metric. Namespace-bound.
+  dynamic "statement" {
+    for_each = var.backup_metrics ? [1] : []
+    content {
+      sid       = "PublishBackupMetric"
+      effect    = "Allow"
+      actions   = ["cloudwatch:PutMetricData"]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "cloudwatch:namespace"
+        values   = ["PDS/Backup"]
       }
     }
   }
