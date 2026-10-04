@@ -31,7 +31,7 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # Render the template with the same variable names the module passes, and values shaped like
 # real ones. $1 is swap_mb, $2 bootstrap_account (default false). Prints the rendered text.
 render() {
-  local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" dir="$WORK/render"
+  local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" schedule="${4:-}" dir="$WORK/render"
   rm -rf "$dir"; mkdir -p "$dir"
   cat > "$dir/main.tf" <<HCL
 output "user_data" {
@@ -48,6 +48,7 @@ output "user_data" {
     bootstrap_account     = $account
     account_ssm_prefix    = "/example/test"
     verification_methods  = $methods
+    backup_on_calendar    = "$schedule"
   })
 }
 HCL
@@ -69,7 +70,7 @@ SWAPPED="$WORK/user-data-swap.sh"
 render 0 > "$RENDERED"
 render 1024 > "$SWAPPED"
 ACCOUNTED="$WORK/user-data-account.sh"
-render 1024 true '{ "org.example.app" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }' > "$ACCOUNTED"
+render 1024 true '{ "org.example.app" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }' daily > "$ACCOUNTED"
 
 bash -n "$RENDERED" || { echo "FAIL: rendered user-data (swap_mb=0) is not valid shell" >&2; exit 1; }
 bash -n "$SWAPPED" || { echo "FAIL: rendered user-data (swap_mb=1024) is not valid shell" >&2; exit 1; }
@@ -118,6 +119,10 @@ check "no verification methods renders no PLC step" \
   "! grep -q 'pds-ensure-verification-methods' '$RENDERED'"
 check "the PLC step runs for the handle with the methods as JSON" \
   "grep -qF '/usr/local/bin/pds-ensure-verification-methods \"alice.test.pds.example.com\" '\''{\"org.example.app\":\"did:key:z6Mk' '$ACCOUNTED'"
+check "no backup schedule installs no timer" \
+  "! grep -q 'pds-backup-identity.timer' '$RENDERED'"
+check "a backup schedule installs the timer, gated on the public key" \
+  "grep -q '^OnCalendar=daily$' '$ACCOUNTED' && grep -q '^ConditionPathExists=/pds/backup-pubkey.pem$' '$ACCOUNTED'"
 check "bootstrap_account = false renders no account step" \
   "! grep -q 'pds-ensure-account' '$RENDERED'"
 check "bootstrap_account publishes the PDS port on loopback only" \

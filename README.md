@@ -20,7 +20,7 @@ each in its own AWS account.
 
 ```hcl
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.4.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.5.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -89,6 +89,7 @@ it to the backup bucket, encrypted to a key it does not hold:
    and `openssl pkey -in backup-private.pem -pubout -out backup-pubkey.pem`.
 2. Put `backup-pubkey.pem` on the host at `/pds/backup-pubkey.pem` (it survives rebuilds).
 3. On the host: `sudo pds-backup-identity` writes `s3://<backup bucket>/<env>/identity-<stamp>.enc.tar`.
+   Or set `backup_on_calendar = "daily"` (v1.5.0+) and a systemd timer does it.
 
 The archive is hybrid-encrypted (v1.4.0+): a fresh AES-256 key and HMAC-SHA256 key per archive,
 AES-256-CBC then HMAC over iv+ciphertext, and only those key bytes wrapped with

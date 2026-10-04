@@ -106,3 +106,30 @@ run "verification_methods_render_the_plc_step" {
     error_message = "The script with the PLC step is delivered gzipped."
   }
 }
+
+run "backup_schedule_renders_a_systemd_timer" {
+  command = plan
+
+  variables {
+    backup_on_calendar = "daily"
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_instance.pds.user_data, "OnCalendar=daily\n") &&
+      strcontains(aws_instance.pds.user_data, "ConditionPathExists=/pds/backup-pubkey.pem") &&
+      strcontains(aws_instance.pds.user_data, "systemctl enable --now pds-backup-identity.timer")
+    )
+    error_message = "A backup schedule must install and enable the timer, gated on the public key."
+  }
+}
+
+run "backup_schedule_refuses_unit_file_injection" {
+  command = plan
+
+  variables {
+    backup_on_calendar = "daily\nExecStartPre=/bin/true"
+  }
+
+  expect_failures = [var.backup_on_calendar]
+}

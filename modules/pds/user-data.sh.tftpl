@@ -320,6 +320,40 @@ aws s3 cp "\$TMP/identity-\$STAMP.enc.tar" \
 echo "archived identity-\$STAMP.enc.tar"
 BACKUPEOF
 chmod +x /usr/local/bin/pds-backup-identity
+%{ if backup_on_calendar != "" ~}
+
+# -------------------------------------------------------------------------------------------
+# Scheduled identity backup. A systemd timer runs pds-backup-identity on ${backup_on_calendar}
+# (with jitter); Persistent catches up a run missed while the host was down. The service is
+# skipped, not failed, until an operator places /pds/backup-pubkey.pem, so a host with no key
+# yet logs nothing alarming. Results: `journalctl -u pds-backup-identity`.
+# -------------------------------------------------------------------------------------------
+cat > /etc/systemd/system/pds-backup-identity.service <<'UNITEOF'
+[Unit]
+Description=Encrypted backup of the PDS identity (secrets.env) to S3
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/pds/backup-pubkey.pem
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pds-backup-identity
+UNITEOF
+cat > /etc/systemd/system/pds-backup-identity.timer <<UNITEOF
+[Unit]
+Description=Scheduled PDS identity backup
+
+[Timer]
+OnCalendar=${backup_on_calendar}
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNITEOF
+systemctl daemon-reload
+systemctl enable --now pds-backup-identity.timer
+%{ endif ~}
 %{ if bootstrap_account ~}
 
 # -------------------------------------------------------------------------------------------

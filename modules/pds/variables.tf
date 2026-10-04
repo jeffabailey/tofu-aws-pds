@@ -180,3 +180,19 @@ variable "verification_methods" {
     error_message = "The #atproto method is the account's own signing key; the PDS manages it."
   }
 }
+
+variable "backup_on_calendar" {
+  description = <<-EOT
+    Run the encrypted identity backup (pds-backup-identity) on this systemd OnCalendar schedule,
+    e.g. "daily" or "*-*-* 03:00:00" (UTC, plus up to 30 min jitter). Skipped until
+    /pds/backup-pubkey.pem exists. "" (the default) installs no timer and renders user_data
+    byte-identical to v1.4.x. Like the other first-boot inputs, replace the instance to apply it.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9*:,./ -]*$", var.backup_on_calendar))
+    error_message = "backup_on_calendar must be a plain systemd OnCalendar expression."
+  }
+}

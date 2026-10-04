@@ -4,6 +4,16 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.5.0 — 2026-10-04
+
+- `modules/pds`: new input `backup_on_calendar` (systemd OnCalendar, default `""`). When set,
+  first boot installs and enables `pds-backup-identity.timer` (30 min jitter, `Persistent=true`),
+  whose service is skipped until `/pds/backup-pubkey.pem` exists. Logs:
+  `journalctl -u pds-backup-identity`.
+- Tests: the timer renders gated on the public key; the input refuses unit-file injection.
+
+**Addresses changed: none.** With `backup_on_calendar = ""`, `user_data` is unchanged.
+
 ## v1.4.1 — 2026-10-03
 
 - `scripts/check-user-data.sh`: an `A && B || C` test tripped CI's shellcheck (SC2015) since
