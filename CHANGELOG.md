@@ -4,6 +4,31 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## v1.7.0 — 2026-10-09
+
+- `modules/pds`: extra Caddy sites. First boot creates `/pds/caddy/sites` (on the data volume,
+  next to `/pds/caddy/{data,config}`, root-owned), mounts it into the Caddy container at
+  `/etc/caddy/sites:ro`, and ends the Caddyfile with `import /etc/caddy/sites/*.caddy` (top
+  level, after the PDS's site blocks). Sites: drop `<name>.caddy` files into `/pds/caddy/sites`
+  and reload Caddy. The module stays project-agnostic and ships no site files. A glob matching no
+  file is a warning in Caddy, not an error, so a host with no sites boots as before.
+- `modules/pds`: new input `imds_hop_limit` (number, default **`1`**, was hard-coded `2`).
+  Containers can no longer fetch an IMDSv2 token, so none can read the instance role; every AWS
+  call the module makes (user-data SSM, the backup's `aws s3 cp`, `put-metric-data`) runs on the
+  host. **Behaviour change:** a consumer running a container that uses the host role must set
+  `imds_hop_limit = 2`. An in-place update of `metadata_options` (no stop/start).
+- Tests: `caddy_sites_imds.tftest.hcl` (directory, read-only mount, import line, hop limit).
+  `scripts/check-user-data.sh` checks the same in the render and, with docker, runs
+  `caddy validate` on the rendered Caddyfile with an empty sites directory and with one site.
+  The golden hashes in `render_identity.tftest.hcl` are updated (old ones kept in its comment).
+
+**Addresses changed: none. `user_data` changes for every consumer, and `metadata_options` changes
+in place (hop limit 2 -> 1) unless `imds_hop_limit = 2`.** On a live host the `user_data` change
+is an in-place stop/start that does not re-run cloud-init, so the sites directory, mount and
+import only exist on a new instance: plan and apply with
+`-replace=module.pds.aws_instance.pds` (the data volume and the EIP survive; the identity is on
+the volume).
+
 ## v1.6.0 — 2026-10-04
 
 - `modules/pds`: new input `backup_alarm` (bool, default `false`, needs `backup_on_calendar`).

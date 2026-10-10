@@ -53,6 +53,7 @@ profile, the backup bucket and a default VPC to exist at plan time.
 | `ssh_ingress_cidr` | string, `null` | One CIDR; `0.0.0.0/0` is refused |
 | `swap_mb` (v1.1.0) | number, `0`, `>= 0` | Swap file on the root volume at first boot. `0` renders `user_data` byte-identical to v1.0.0 |
 | `verification_methods` (v1.3.0) | map(string), `{}` | `{ "<id>" = "did:key:z..." }` published into the account's did:plc document at first boot (signed with the PDS rotation key). Needs the account to exist |
+| `imds_hop_limit` (v1.7.0) | number, `1`, `1..64` | IMDSv2 PUT response hop limit. `1` keeps containers off the instance role (every module AWS call runs on the host); `2` is the v1.6.x behaviour, for a container that needs the role. In-place change |
 | `bootstrap_account` (v1.2.0) | bool, `false` | Create the descriptor's handle as the first account at first boot; passwords go to SSM `/<name_prefix>/<env>/{account-password,cli-app-password}`. Needs `bootstrap_account = true` on `modules/pds-bootstrap` too |
 
 `descriptor` fields: `environment`, `atproto_namespace`, `pds_hostname`, `handle`,
@@ -78,6 +79,16 @@ None is sensitive, and none can be: every credential is generated on the host at
 
 Outputs: `backup_bucket`, `host_instance_profile_names`, `state_bucket`, `hosted_zone_id`,
 `default_vpc_id`, `plan_role_arns`, `apply_role_arns`, `account_id`.
+
+## Extra Caddy sites (v1.7.0+)
+
+The PDS's Caddy also serves other hostnames on the same host. Sites: drop `<name>.caddy` files
+into `/pds/caddy/sites` and reload Caddy
+(`docker compose -f /pds/compose.yaml exec caddy caddy reload --config /etc/caddy/Caddyfile`).
+First boot creates that directory on the data volume, mounts it read-only into the Caddy
+container at `/etc/caddy/sites`, and ends the Caddyfile with `import /etc/caddy/sites/*.caddy`.
+An empty directory is fine: Caddy logs "No files matching import glob pattern" and starts. The
+module stays project-agnostic: it ships no site files. `{$PDS_HOSTNAME}` is available in them.
 
 ## Identity backup and restore
 
