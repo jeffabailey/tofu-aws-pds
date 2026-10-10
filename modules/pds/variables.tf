@@ -210,3 +210,21 @@ variable "backup_alarm" {
   type        = bool
   default     = false
 }
+
+variable "imds_hop_limit" {
+  description = <<-EOT
+    IMDSv2 PUT response hop limit for the host. 1 (the default since v1.7.0) means only the host
+    itself can fetch an IMDS token: a container on a bridge network is one hop further and times
+    out, so no container can read the instance role. Every AWS call this module makes (user-data
+    SSM reads, the backup's `aws s3 cp`, `put-metric-data`) runs on the host. Set 2 only if a
+    container you run genuinely needs the host role (v1.6.x behaviour). Changing it is an in-place
+    update of the instance's metadata options: no stop/start, no replacement.
+  EOT
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.imds_hop_limit >= 1 && var.imds_hop_limit <= 64 && floor(var.imds_hop_limit) == var.imds_hop_limit
+    error_message = "imds_hop_limit must be a whole number from 1 to 64."
+  }
+}

@@ -306,10 +306,14 @@ resource "aws_instance" "pds" {
     delete_on_termination = true
   }
 
+  # Containers must not read the instance role; every AWS call (user-data SSM, backup
+  # `aws s3 cp`, `put-metric-data`) runs on the host. A hop limit of 1 stops an IMDS token at a
+  # container's bridge hop. var.imds_hop_limit is the escape hatch for a consumer that needs 2.
+  # Changing it is an in-place update (no stop/start).
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required" # IMDSv2 only
-    http_put_response_hop_limit = 2          # the container reads the instance role
+    http_put_response_hop_limit = var.imds_hop_limit
   }
 
   # EC2 caps user_data at 16 KiB. A script that fits is passed as-is (so an existing host's

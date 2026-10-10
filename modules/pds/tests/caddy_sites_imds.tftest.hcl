@@ -1,8 +1,11 @@
-# v1.7.0: the host serves extra Caddy sites.
+# v1.7.0: the host serves extra Caddy sites and keeps containers off the instance role.
 #
 # Sites: user_data creates /pds/caddy/sites, the Caddy container mounts it read-only at
 # /etc/caddy/sites, and the Caddyfile imports /etc/caddy/sites/*.caddy at top level. Consumers'
 # deploy scripts check exactly these three things (and never create the directory themselves).
+#
+# IMDS: the PUT response hop limit is 1 by default, so a container on a bridge network cannot get
+# an IMDSv2 token; imds_hop_limit = 2 restores the v1.6.x behaviour for a consumer that needs it.
 
 mock_provider "aws" {
   mock_data "aws_subnets" {
@@ -70,4 +73,41 @@ run "sites_directory_is_created_mounted_read_only_and_imported" {
     condition     = strcontains(aws_instance.pds.user_data, "\treverse_proxy http://pds:3000\n}\n\n") && can(regex("\nimport /etc/caddy/sites/\\*\\.caddy\nCADDYEOF\n", aws_instance.pds.user_data))
     error_message = "The import must be the Caddyfile's last line, at top level, after the PDS site blocks."
   }
+}
+
+run "imds_hop_limit_defaults_to_1" {
+  command = plan
+
+  assert {
+    condition     = aws_instance.pds.metadata_options[0].http_put_response_hop_limit == 1
+    error_message = "IMDS hop limit must default to 1: containers must not read the instance role."
+  }
+
+  assert {
+    condition     = aws_instance.pds.metadata_options[0].http_tokens == "required" && aws_instance.pds.metadata_options[0].http_endpoint == "enabled"
+    error_message = "IMDSv2 must stay required and the endpoint enabled (the host's own AWS calls need it)."
+  }
+}
+
+run "imds_hop_limit_2_is_an_explicit_opt_out" {
+  command = plan
+
+  variables {
+    imds_hop_limit = 2
+  }
+
+  assert {
+    condition     = aws_instance.pds.metadata_options[0].http_put_response_hop_limit == 2
+    error_message = "imds_hop_limit = 2 is not passed to the instance."
+  }
+}
+
+run "imds_hop_limit_0_is_refused" {
+  command = plan
+
+  variables {
+    imds_hop_limit = 0
+  }
+
+  expect_failures = [var.imds_hop_limit]
 }
