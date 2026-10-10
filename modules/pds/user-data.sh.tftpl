@@ -178,7 +178,10 @@ PDS_INTENDED_HANDLE=$HANDLE
 ENVEOF
 chmod 600 /pds/pds.env
 
-mkdir -p /pds/blocks /pds/caddy/data /pds/caddy/config
+# /pds/caddy/sites holds extra Caddy site blocks (<name>.caddy) that applications on this host
+# drop in; the Caddyfile below imports them. Created here, never by those applications, so its
+# presence (with the mount and the import) proves the host was built by a module that serves it.
+mkdir -p /pds/blocks /pds/caddy/data /pds/caddy/config /pds/caddy/sites
 
 # -------------------------------------------------------------------------------------------
 # Compose. Vendored from upstream and deliberately different in three ways (deploy/spike/README).
@@ -232,6 +235,12 @@ cat > /pds/caddy/Caddyfile <<'CADDYEOF'
 	}
 	reverse_proxy http://pds:3000
 }
+
+# EXTRA SITES. Applications on this host serve their own hostnames by dropping <name>.caddy
+# files into /pds/caddy/sites (mounted read-only here) and reloading Caddy. Top level, after the
+# PDS's own blocks. A glob that matches no file is a warning, not an error, so a host with no
+# sites still starts.
+import /etc/caddy/sites/*.caddy
 CADDYEOF
 
 cat > /pds/compose.yaml <<COMPOSEEOF
@@ -249,6 +258,7 @@ services:
       - /pds/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - /pds/caddy/data:/data
       - /pds/caddy/config:/config
+      - /pds/caddy/sites:/etc/caddy/sites:ro
     depends_on:
       - pds
 

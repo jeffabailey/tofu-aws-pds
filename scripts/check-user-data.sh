@@ -17,7 +17,8 @@
 # The template is rendered by OpenTofu's own templatefile() in a throwaway root with no
 # providers, so directives (%{ if }) render exactly as they do in the module, and a variable
 # the template uses but this check does not pass is an error rather than a silent gap. Needs
-# `tofu` on PATH; no credentials, no network.
+# `tofu` on PATH; no credentials. The Caddyfile check below also needs docker (it pulls the
+# Caddy image the host runs) and is skipped without it.
 
 set -euo pipefail
 
@@ -140,6 +141,12 @@ check "an existing handle exits before anything is created" \
   "[ \$(grep -n 'resolveHandle' '$ENSURE' | cut -d: -f1) -lt \$(grep -n 'createInviteCode' '$ENSURE' | cut -d: -f1) ]"
 check "the account password is stored before the app password is minted" \
   "[ \$(grep -n 'account-password' '$ENSURE' | head -1 | cut -d: -f1) -lt \$(grep -n 'createAppPassword' '$ENSURE' | cut -d: -f1) ]"
+check "the Caddy sites directory is created on the data volume" \
+  "grep -qE '^mkdir -p .* /pds/caddy/sites$' '$RENDERED'"
+check "the Caddy container mounts the sites directory read-only" \
+  "grep -qxF '      - /pds/caddy/sites:/etc/caddy/sites:ro' '$RENDERED'"
+check "the Caddyfile imports the sites (the consumers' deploy scripts look for this line)" \
+  "grep -qE '^[[:space:]]*import[[:space:]]+/etc/caddy/sites/\\*\\.caddy' '$RENDERED'"
 check "swap_mb = 1024 creates and enables a swap file" \
   "grep -q '^SWAP_MB=1024$' '$SWAPPED' && grep -q 'swapon' '$SWAPPED'"
 
@@ -184,6 +191,28 @@ AWSEOF
   echo "identity backup round-trips (2048- and 4096-bit keys) and refuses a tampered archive"
 else
   echo "SKIP: identity backup round trip needs OpenSSL 3 and xxd" >&2
+fi
+
+# The Caddyfile, validated by the Caddy the host runs: with an EMPTY sites directory (a host with
+# no sites must still boot the PDS) and with one site dropped in (the import really loads it).
+CADDY_IMAGE=$(sed -n 's/^    image: \(caddy:.*\)$/\1/p' "$RENDERED")
+if [ -n "$CADDY_IMAGE" ] && command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  CV="$WORK/caddy"; mkdir -p "$CV/sites"
+  sed -n "/<<'CADDYEOF'$/,/^CADDYEOF$/p" "$RENDERED" | sed '1d;$d' > "$CV/Caddyfile"
+  caddy_validate() {
+    docker run --rm -e PDS_HOSTNAME=test.pds.example.com -e PDS_ACME_EMAIL=ops@example.com \
+      -v "$CV/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$CV/sites:/etc/caddy/sites:ro" \
+      "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  }
+  caddy_validate >"$CV/empty.log" 2>&1 \
+    || { cat "$CV/empty.log" >&2; echo "FAIL: caddy validate fails with an empty sites directory" >&2; exit 1; }
+  # shellcheck disable=SC2016 # {$PDS_HOSTNAME} is a Caddy placeholder, not shell
+  printf 'app.{$PDS_HOSTNAME} {\n\trespond "ok"\n}\n' > "$CV/sites/app.caddy"
+  caddy_validate >"$CV/site.log" 2>&1 \
+    || { cat "$CV/site.log" >&2; echo "FAIL: caddy validate fails with a site in the sites directory" >&2; exit 1; }
+  echo "Caddyfile validates ($CADDY_IMAGE) with no sites and with one"
+else
+  echo "SKIP: Caddyfile validation needs docker" >&2
 fi
 
 [ "$fail" -eq 0 ] || exit 1

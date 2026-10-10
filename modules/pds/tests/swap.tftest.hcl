@@ -40,7 +40,7 @@ run "swap_zero_renders_the_golden" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
+    condition     = sha256(aws_instance.pds.user_data) == "eaa367e2744a8df071e069e547a486f1dcf512f51d3f7c4245c37fb0ee107f4a"
     error_message = "swap_mb = 0 changed user_data (sha256 ${sha256(aws_instance.pds.user_data)})."
   }
 
@@ -79,7 +79,7 @@ run "swap_1024_renders_a_swapfile_step" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) != "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
+    condition     = sha256(aws_instance.pds.user_data) != "eaa367e2744a8df071e069e547a486f1dcf512f51d3f7c4245c37fb0ee107f4a"
     error_message = "swap_mb = 1024 rendered the same user_data as swap_mb = 0."
   }
 }

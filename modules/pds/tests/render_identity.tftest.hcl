@@ -16,6 +16,10 @@
 #   body of /usr/local/bin/pds-backup-identity (hybrid encryption; see CHANGELOG):
 #     prod  2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368
 #     test  0b2f169dd869dfc3368f4ffd91f9955cb67c6eaa54d9870dc332055fbcd31a7b
+#   v1.7.0 (2026-10-09): the same inputs after the Caddy sites change, whose only change is
+#   /pds/caddy/sites (created, mounted read-only at /etc/caddy/sites, imported by the Caddyfile):
+#     prod  eaa367e2744a8df071e069e547a486f1dcf512f51d3f7c4245c37fb0ee107f4a
+#     test  42308c2d290cda991a6bf368ef7362449b69edde289efe555afe207cd9b4ae0f
 
 # Everything is mocked. The test creates nothing and needs no credentials.
 
@@ -57,7 +61,7 @@ run "trb_prod_renders_byte_identical" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "2fc2df2ec6addb93c5846a6f5d578310998ddb6e9ae7d3946067e54ac124a368"
+    condition     = sha256(aws_instance.pds.user_data) == "eaa367e2744a8df071e069e547a486f1dcf512f51d3f7c4245c37fb0ee107f4a"
     error_message = "TRB prod user_data changed: sha256 ${sha256(aws_instance.pds.user_data)}. Applying this would stop/start the live prod PDS."
   }
 }
@@ -82,7 +86,7 @@ run "trb_test_renders_byte_identical" {
   }
 
   assert {
-    condition     = sha256(aws_instance.pds.user_data) == "0b2f169dd869dfc3368f4ffd91f9955cb67c6eaa54d9870dc332055fbcd31a7b"
+    condition     = sha256(aws_instance.pds.user_data) == "42308c2d290cda991a6bf368ef7362449b69edde289efe555afe207cd9b4ae0f"
     error_message = "TRB test user_data changed: sha256 ${sha256(aws_instance.pds.user_data)}."
   }
 }
