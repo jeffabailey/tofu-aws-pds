@@ -43,6 +43,7 @@ locals {
     backup_bucket         = var.backup_bucket
     aws_region            = var.descriptor.aws_region
     swap_mb               = var.swap_mb
+    swappiness            = var.swappiness
     bootstrap_account     = var.bootstrap_account
     account_ssm_prefix    = local.account_ssm_prefix
     verification_methods  = var.verification_methods

@@ -42,6 +42,13 @@ if [ ! -f "$SWAPFILE" ]; then
 fi
 grep -q "^$SWAPFILE " /etc/fstab || echo "$SWAPFILE none swap defaults 0 0" >> /etc/fstab
 swapon --show=NAME --noheadings | grep -qx "$SWAPFILE" || swapon "$SWAPFILE"
+%{ if swappiness != null ~}
+# How readily the kernel moves idle program memory to swap to make room for file cache. The
+# kernel default (60) does that freely on a 1 GiB host; a low value keeps swap for real
+# pressure. Persisted in sysctl.d so a reboot keeps it; safe to re-run.
+echo "vm.swappiness = ${swappiness}" > /etc/sysctl.d/90-pds-swappiness.conf
+sysctl -q -w vm.swappiness=${swappiness}
+%{ endif ~}
 %{ endif }
 dnf -q -y update
 dnf -q -y install docker jq awscli-2

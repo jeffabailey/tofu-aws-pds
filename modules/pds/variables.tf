@@ -140,6 +140,29 @@ variable "swap_mb" {
   }
 }
 
+variable "swappiness" {
+  description = <<-EOT
+    vm.swappiness for the host, 0-200, applied at first boot alongside the swap file (so it needs
+    swap_mb > 0) and persisted in /etc/sysctl.d. The kernel default, 60, moves idle program
+    memory to swap freely to make room for file cache; on a 1 GiB host 10 keeps swap for real
+    memory pressure. null (the default) leaves the kernel default and renders user_data
+    byte-identical to v1.7.0. Like swap_mb, cloud-init only runs on a new instance: on a live
+    host set it once by hand (`sysctl.d` file plus `sysctl -w`) or replace the instance.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.swappiness == null || (var.swappiness >= 0 && var.swappiness <= 200 && floor(var.swappiness) == var.swappiness)
+    error_message = "swappiness must be null or a whole number from 0 to 200."
+  }
+
+  validation {
+    condition     = var.swappiness == null || var.swap_mb > 0
+    error_message = "swappiness is applied with the swap file: set swap_mb > 0 as well."
+  }
+}
+
 variable "bootstrap_account" {
   description = <<-EOT
     Create the descriptor's handle as the PDS's first account at first boot, with an app password

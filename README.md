@@ -52,6 +52,7 @@ profile, the backup bucket and a default VPC to exist at plan time.
 | `ssh_key_name` | string, `null` | Break-glass only |
 | `ssh_ingress_cidr` | string, `null` | One CIDR; `0.0.0.0/0` is refused |
 | `swap_mb` (v1.1.0) | number, `0`, `>= 0` | Swap file on the root volume at first boot. `0` renders `user_data` byte-identical to v1.0.0 |
+| `swappiness` (unreleased) | number, `null`, `0`-`200` | `vm.swappiness` set with the swap file (needs `swap_mb > 0`), persisted in `/etc/sysctl.d`. `null` renders `user_data` byte-identical to v1.7.0 |
 | `verification_methods` (v1.3.0) | map(string), `{}` | `{ "<id>" = "did:key:z..." }` published into the account's did:plc document at first boot (signed with the PDS rotation key). Needs the account to exist |
 | `imds_hop_limit` (v1.7.0) | number, `1`, `1..64` | IMDSv2 PUT response hop limit. `1` keeps containers off the instance role (every module AWS call runs on the host); `2` is the v1.6.x behaviour, for a container that needs the role. In-place change |
 | `bootstrap_account` (v1.2.0) | bool, `false` | Create the descriptor's handle as the first account at first boot; passwords go to SSM `/<name_prefix>/<env>/{account-password,cli-app-password}`. Needs `bootstrap_account = true` on `modules/pds-bootstrap` too |

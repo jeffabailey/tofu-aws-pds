@@ -93,3 +93,54 @@ run "negative_swap_is_refused" {
 
   expect_failures = [var.swap_mb]
 }
+
+# swappiness (v1.8.0). null must leave user_data byte-identical; a value is written to sysctl.d
+# and applied at once, inside the swap step.
+run "swappiness_null_leaves_the_swap_step_unchanged" {
+  command = plan
+
+  variables {
+    swap_mb = 1024
+  }
+
+  assert {
+    condition     = !strcontains(aws_instance.pds.user_data, "swappiness") && strcontains(aws_instance.pds.user_data, "swapon \"$SWAPFILE\"\n\ndnf -q -y update")
+    error_message = "swappiness = null must render no swappiness step."
+  }
+}
+
+run "swappiness_10_is_persisted_and_applied" {
+  command = plan
+
+  variables {
+    swap_mb    = 1024
+    swappiness = 10
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.pds.user_data, "echo \"vm.swappiness = 10\" > /etc/sysctl.d/90-pds-swappiness.conf\nsysctl -q -w vm.swappiness=10\n\ndnf -q -y update")
+    error_message = "swappiness = 10 must be written to sysctl.d and applied before dnf update."
+  }
+}
+
+run "swappiness_out_of_range_is_refused" {
+  command = plan
+
+  variables {
+    swap_mb    = 1024
+    swappiness = 201
+  }
+
+  expect_failures = [var.swappiness]
+}
+
+run "swappiness_without_swap_is_refused" {
+  command = plan
+
+  variables {
+    swap_mb    = 0
+    swappiness = 10
+  }
+
+  expect_failures = [var.swappiness]
+}

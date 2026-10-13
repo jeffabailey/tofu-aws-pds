@@ -32,7 +32,7 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 # Render the template with the same variable names the module passes, and values shaped like
 # real ones. $1 is swap_mb, $2 bootstrap_account (default false). Prints the rendered text.
 render() {
-  local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" schedule="${4:-}" dir="$WORK/render"
+  local swap_mb="$1" account="${2:-false}" methods="${3:-{\}}" schedule="${4:-}" swappiness="${5:-null}" dir="$WORK/render"
   # The alarm needs a schedule; render it whenever one is given.
   local alarm=false
   if [ -n "$schedule" ]; then alarm=true; fi
@@ -49,6 +49,7 @@ output "user_data" {
     backup_bucket         = "example-identity-backup-000000000000"
     aws_region            = "us-east-1"
     swap_mb               = $swap_mb
+    swappiness            = $swappiness
     bootstrap_account     = $account
     account_ssm_prefix    = "/example/test"
     verification_methods  = $methods
@@ -76,7 +77,7 @@ SWAPPED="$WORK/user-data-swap.sh"
 render 0 > "$RENDERED"
 render 1024 > "$SWAPPED"
 ACCOUNTED="$WORK/user-data-account.sh"
-render 1024 true '{ "org.example.app" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }' daily > "$ACCOUNTED"
+render 1024 true '{ "org.example.app" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR" }' daily 10 > "$ACCOUNTED"
 
 bash -n "$RENDERED" || { echo "FAIL: rendered user-data (swap_mb=0) is not valid shell" >&2; exit 1; }
 bash -n "$SWAPPED" || { echo "FAIL: rendered user-data (swap_mb=1024) is not valid shell" >&2; exit 1; }
@@ -119,6 +120,10 @@ check "mkfs is guarded by a filesystem test" \
   "grep -B4 'mkfs.ext4' '$RENDERED' | grep -q 'FSTYPE'"
 check "on-demand TLS declares an ask endpoint (Caddy will not start without one)" \
   "grep -q 'on_demand_tls' '$RENDERED'"
+check "no swappiness renders no sysctl step" \
+  "! grep -q 'swappiness' '$SWAPPED'"
+check "a swappiness is persisted in sysctl.d and applied" \
+  "grep -q '^echo \"vm.swappiness = 10\" > /etc/sysctl.d/90-pds-swappiness.conf$' '$ACCOUNTED' && grep -q '^sysctl -q -w vm.swappiness=10$' '$ACCOUNTED'"
 check "swap_mb = 0 renders no swap step" \
   "! grep -q 'swapon' '$RENDERED'"
 check "no verification methods renders no PLC step" \

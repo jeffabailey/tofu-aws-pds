@@ -4,6 +4,22 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
+## Unreleased
+
+- `modules/pds`: new input `swappiness` (number, default `null`, `0`-`200`, needs `swap_mb > 0`).
+  When set, the swap step writes `vm.swappiness = <n>` to `/etc/sysctl.d/90-pds-swappiness.conf`
+  and applies it with `sysctl -w`, before `dnf update`. The kernel default (60) moves idle
+  program memory to swap freely on a 1 GiB host; OpenLore's memory gate saw steady swap-ins with
+  400 MB free, and uses `10`.
+- Tests: four runs in `swap.tftest.hcl` (null renders nothing; 10 is persisted and applied;
+  out of range and without swap are refused). `scripts/check-user-data.sh` renders and checks
+  the step.
+
+**Addresses changed: none.** `null` renders `user_data` byte-identical to v1.7.0, so bumping
+without setting it plans no change. Setting it on a live host changes `user_data` (an in-place
+stop/start that does not re-run cloud-init): set it on the running host by hand instead, as the
+step does, and let the input carry it to the next replacement.
+
 ## v1.7.0 — 2026-10-09
 
 - `modules/pds`: extra Caddy sites. First boot creates `/pds/caddy/sites` (on the data volume,
