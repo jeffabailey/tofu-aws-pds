@@ -4,7 +4,7 @@ Every entry states **addresses changed**: the resource addresses (or ForceNew at
 change for a consumer who keeps their existing inputs. `none` means a version bump must plan with
 no `create`, `delete` or replace.
 
-## Unreleased
+## v1.8.0 — 2026-10-13
 
 - `modules/pds`: new input `swappiness` (number, default `null`, `0`-`200`, needs `swap_mb > 0`).
   When set, the swap step writes `vm.swappiness = <n>` to `/etc/sysctl.d/90-pds-swappiness.conf`
